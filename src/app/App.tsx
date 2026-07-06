@@ -13,9 +13,10 @@ import {
 import { createClient } from "@supabase/supabase-js";
 
 const projectId = "wnzmsvcimrvmbzmmmixn";
+const supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Induem1zdmNpbXJ2bWJ6bW1taXhuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyNzEwMDYsImV4cCI6MjA5ODg0NzAwNn0.Pl_uW2lVit3V8dK6P6a8Ym_50vxTvPoFVsVypjqMVXs";
 const supabase = createClient(
   `https://${projectId}.supabase.co`,
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Induem1zdmNpbXJ2bWJ6bW1taXhuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyNzEwMDYsImV4cCI6MjA5ODg0NzAwNn0.Pl_uW2lVit3V8dK6P6a8Ym_50vxTvPoFVsVypjqMVXs"
+  supabaseAnonKey
 );
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -124,7 +125,7 @@ const saveLocalData    = (uid: string, d: AppData) => lsSet(`hh_data_${uid}`, d)
 
 // ─── Background API (never blocks the UI) ────────────────────────────────────
 const bg = (url: string, opts?: RequestInit) =>
-  fetch(url, { signal: AbortSignal.timeout(6000), headers: { "Content-Type": "application/json" }, ...opts }).catch(() => {});
+  fetch(url, { signal: AbortSignal.timeout(6000), headers: { "Content-Type": "application/json", "Authorization": `Bearer ${supabaseAnonKey}`, "apikey": supabaseAnonKey }, ...opts }).catch(() => {});
 
 const bgPost = (userId: string, p: UserProfile) =>
   bg(`${SERVER}/profile`, { method: "POST", body: JSON.stringify({ userId, ...p }) });
@@ -132,11 +133,11 @@ const bgData = (userId: string, d: AppData) =>
   bg(`${SERVER}/gamedata`, { method: "POST", body: JSON.stringify({ userId, data: d }) });
 
 async function apiFetch<T>(path: string, fallback: T): Promise<T> {
-  try { const r = await fetch(`${SERVER}${path}`, { signal: AbortSignal.timeout(12000) }); return await r.json(); }
+  try { const r = await fetch(`${SERVER}${path}`, { signal: AbortSignal.timeout(12000), headers: { "Authorization": `Bearer ${supabaseAnonKey}`, "apikey": supabaseAnonKey } }); return await r.json(); }
   catch { return fallback as any; }
 }
 async function apiPost(path: string, body: any) {
-  try { const r = await fetch(`${SERVER}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(12000) }); return await r.json(); }
+  try { const r = await fetch(`${SERVER}${path}`, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${supabaseAnonKey}`, "apikey": supabaseAnonKey }, body: JSON.stringify(body), signal: AbortSignal.timeout(12000) }); return await r.json(); }
   catch { return null; }
 }
 
