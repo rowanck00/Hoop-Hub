@@ -468,25 +468,29 @@ function PlayerProfileView({ player, onBack }: { player: CommunityPlayer; onBack
 
 // ─── Login Screen ─────────────────────────────────────────────────────────────
 function LoginScreen() {
-  const [sent, setSent] = useState(false);
-  const [email, setEmail] = useState(""), [loading, setLoading] = useState(false), [error, setError] = useState("");
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  async function handleEmail(e: React.FormEvent) {
-    e.preventDefault(); if (!email.trim()) return;
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!email.trim() || !password.trim()) return;
     setLoading(true); setError("");
-    const { error } = await supabase.auth.signInWithOtp({
-      email: email.trim(),
-      options: { emailRedirectTo: window.location.origin },
-    });
-    if (error) {
-      if (error.message.includes("rate") || error.message.includes("limit")) {
-        setError("Too many attempts — please wait a few minutes then try again, or check your inbox for a previous link.");
-      } else {
-        setError(error.message);
-      }
-      setLoading(false);
+
+    if (isSignUp) {
+      const { error } = await supabase.auth.signUp({ email: email.trim(), password });
+      if (error) { setError(error.message); setLoading(false); }
+      else { setError(""); setIsSignUp(false); setPassword(""); setError("Account created! Now sign in with your email and password."); }
     } else {
-      setSent(true);
+      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (error) {
+        if (error.message.includes("Invalid")) setError("Wrong email or password. Try again or create an account.");
+        else setError(error.message);
+        setLoading(false);
+      }
+      // on success, onAuthStateChange fires automatically
     }
   }
 
@@ -502,29 +506,27 @@ function LoginScreen() {
           <div><h1 className="text-4xl font-black tracking-tight" style={{ fontFamily: "'Roboto Slab',serif" }}>{APP_NAME}</h1><p className="text-muted-foreground mt-2">{APP_TAGLINE}</p></div>
         </div>
         <div className="bg-card border border-border rounded-2xl p-6 flex flex-col gap-4">
-          {sent ? (
-            <div className="text-center py-4 flex flex-col gap-3">
-              <div className="text-4xl">📬</div>
-              <h2 className="font-bold text-lg">Check your email</h2>
-              <p className="text-sm text-muted-foreground">We sent a sign-in link to <strong className="text-foreground">{email}</strong>. Click it to get in — stays logged in after that.</p>
-              <button onClick={() => { setSent(false); setError(""); }} className="text-xs text-muted-foreground hover:text-primary mt-2">Use a different email</button>
-            </div>
-          ) : (
-            <form onSubmit={handleEmail} className="flex flex-col gap-4">
-              <div>
-                <h2 className="font-bold text-base mb-1">Sign in with your email</h2>
-                <p className="text-xs text-muted-foreground mb-3">We&apos;ll send you a one-time link. No password needed, and you stay logged in.</p>
-                <input autoFocus type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" required
-                  className="w-full bg-secondary border border-border rounded-xl px-4 py-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary" />
-              </div>
-              {error && <p className="text-xs text-amber-400 bg-amber-400/10 rounded-lg p-3 leading-relaxed">{error}</p>}
-              <button type="submit" disabled={loading}
-                className="w-full bg-primary text-primary-foreground font-semibold py-3 rounded-xl hover:bg-accent disabled:opacity-50 text-sm">
-                {loading ? "Sending…" : "Send Sign-in Link ✉️"}
-              </button>
-              <p className="text-xs text-center text-muted-foreground">Your stats are private by default.</p>
-            </form>
-          )}
+          <div>
+            <h2 className="font-bold text-base mb-1">{isSignUp ? "Create your account" : "Welcome back"}</h2>
+            <p className="text-xs text-muted-foreground">{isSignUp ? "Sign up once, stay logged in forever." : "Enter your email and password to get in."}</p>
+          </div>
+          <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+            <input autoFocus type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email address" required
+              className="w-full bg-secondary border border-border rounded-xl px-4 py-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary" />
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder={isSignUp ? "Create a password (min 6 chars)" : "Password"} required minLength={6}
+              className="w-full bg-secondary border border-border rounded-xl px-4 py-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary" />
+            {error && <p className={`text-xs rounded-lg p-3 leading-relaxed ${error.includes("created") ? "text-green-400 bg-green-400/10" : "text-amber-400 bg-amber-400/10"}`}>{error}</p>}
+            <button type="submit" disabled={loading}
+              className="w-full bg-primary text-primary-foreground font-semibold py-3 rounded-xl hover:bg-accent disabled:opacity-50 text-sm">
+              {loading ? "Please wait…" : isSignUp ? "Create Account 🏀" : "Sign In"}
+            </button>
+          </form>
+          <div className="flex items-center justify-center gap-1 text-xs text-muted-foreground">
+            {isSignUp ? "Already have an account?" : "New here?"}
+            <button onClick={() => { setIsSignUp(v => !v); setError(""); setPassword(""); }} className="text-primary hover:underline font-medium">
+              {isSignUp ? "Sign in" : "Create account"}
+            </button>
+          </div>
         </div>
         <button onClick={() => { const u = new URL(window.location.href); u.searchParams.set("view", "community"); window.location.href = u.toString(); }}
           className="flex items-center justify-center gap-2 text-sm text-muted-foreground hover:text-primary">
