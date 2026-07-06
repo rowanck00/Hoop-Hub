@@ -25,6 +25,13 @@ interface UserProfile {
   userId: string; firstName: string; lastName: string; email: string;
   position: string; gradYear: string; height: string; weight: string;
   wingspan: string; vertical: string; bio: string; isPublic: boolean;
+  strengths: string; weaknesses: string;
+}
+interface Team {
+  id: string; name: string; level: string; description: string; location: string;
+  createdBy: string; creatorName: string; members: string[];
+  memberProfiles: { userId: string; firstName: string; lastName: string; position: string; }[];
+  createdAt: string;
 }
 interface MiniProfile { firstName: string; lastName: string; position: string; }
 interface PostData {
@@ -52,6 +59,7 @@ interface AppData {
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
+const TEAM_LEVELS = ["Men's League", "High School", "College", "Pro / Overseas", "Club / Recreational"];
 const SERVER = `https://${projectId}.supabase.co/functions/v1/make-server-4cb0fb87`;
 const APP_NAME = "HOOP HUB";
 const APP_TAGLINE = "Track your game. Own your grind.";
@@ -108,6 +116,12 @@ async function apiPost(path: string, body: any) {
   try { const r = await fetch(`${SERVER}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(6000) }); return await r.json(); }
   catch { return null; }
 }
+
+const fetchTeams = async (): Promise<Team[]> => { const d = await apiFetch<{teams: Team[]}>("/teams", {teams:[]}); return d.teams ?? []; };
+const createTeam = (body: any) => apiPost("/teams", body);
+const joinTeam   = (id: string, userId: string) => apiPost(`/teams/${id}/join`, { userId });
+const leaveTeam  = (id: string, userId: string) => apiPost(`/teams/${id}/leave`, { userId });
+const deleteTeam = (id: string) => bg(`${SERVER}/teams/${id}`, { method: "DELETE" });
 
 // ─── Chart Tip ────────────────────────────────────────────────────────────────
 const ChartTip = ({ active, payload, label, unit = "" }: any) => {
@@ -350,8 +364,151 @@ function PlayersTab({ onSelect }: { onSelect: (p: CommunityPlayer) => void }) {
 }
 
 // ─── Community Page ───────────────────────────────────────────────────────────
+// ─── Teams Tab ────────────────────────────────────────────────────────────────
+function TeamsTab({ currentUserId }: { currentUserId?: string }) {
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [levelFilter, setLevelFilter] = useState("All");
+  const [form, setForm] = useState({ name: "", level: TEAM_LEVELS[0], description: "", location: "" });
+  const [saving, setSaving] = useState(false);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  useEffect(() => { fetchTeams().then(t => { setTeams(t); setLoading(false); }); }, []);
+
+  const filtered = teams.filter(t => levelFilter === "All" || t.level === levelFilter);
+
+  async function handleCreate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!currentUserId || !form.name.trim()) return;
+    setSaving(true);
+    const res = await createTeam({ userId: currentUserId, ...form });
+    if (res?.team) setTeams(prev => [{ ...res.team, memberProfiles: [], creatorName: "You" }, ...prev]);
+    setCreating(false); setForm({ name: "", level: TEAM_LEVELS[0], description: "", location: "" }); setSaving(false);
+  }
+
+  async function handleJoin(teamId: string) {
+    if (!currentUserId) return;
+    await joinTeam(teamId, currentUserId);
+    setTeams(prev => prev.map(t => t.id === teamId ? { ...t, members: [...t.members, currentUserId] } : t));
+  }
+
+  async function handleLeave(teamId: string) {
+    if (!currentUserId) return;
+    await leaveTeam(teamId, currentUserId);
+    setTeams(prev => prev.map(t => t.id === teamId ? { ...t, members: t.members.filter(id => id !== currentUserId) } : t));
+  }
+
+  async function handleDelete(teamId: string) {
+    await deleteTeam(teamId);
+    setTeams(prev => prev.filter(t => t.id !== teamId));
+  }
+
+  const inputCls = "w-full bg-secondary border border-border rounded-xl px-4 py-2.5 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary";
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">Browse teams or create your own. Any level welcome.</p>
+        {currentUserId && !creating && (
+          <button onClick={() => setCreating(true)} className="flex items-center gap-1.5 bg-primary text-primary-foreground text-sm font-semibold px-4 py-2 rounded-xl hover:bg-accent transition-colors">
+            <Plus size={14} /> Create Team
+          </button>
+        )}
+      </div>
+
+      {creating && currentUserId && (
+        <form onSubmit={handleCreate} className="bg-card border border-border rounded-2xl p-5 space-y-4">
+          <h3 className="font-bold">Create a Team</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">Team Name *</label><input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Westside Ballers" required className={inputCls} /></div>
+            <div><label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">Level</label>
+              <select value={form.level} onChange={e => setForm(f => ({ ...f, level: e.target.value }))} className={inputCls}>
+                {TEAM_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">Location (optional)</label><input value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} placeholder="e.g. Chicago, IL" className={inputCls} /></div>
+            <div><label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">Description (optional)</label><input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="What's your team about?" className={inputCls} /></div>
+          </div>
+          <div className="flex gap-2">
+            <button type="submit" disabled={saving || !form.name.trim()} className="bg-primary text-primary-foreground font-semibold px-5 py-2.5 rounded-xl hover:bg-accent disabled:opacity-40 text-sm">{saving ? "Creating…" : "Create Team"}</button>
+            <button type="button" onClick={() => setCreating(false)} className="bg-secondary text-secondary-foreground font-semibold px-4 py-2.5 rounded-xl hover:bg-muted text-sm">Cancel</button>
+          </div>
+        </form>
+      )}
+
+      {/* Level filter */}
+      <div className="flex gap-2 flex-wrap">
+        {["All", ...TEAM_LEVELS].map(l => (
+          <button key={l} onClick={() => setLevelFilter(l)} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors ${levelFilter === l ? "bg-primary text-primary-foreground" : "bg-card border border-border text-muted-foreground hover:text-foreground"}`}>{l}</button>
+        ))}
+      </div>
+
+      {loading ? <div className="text-center py-12 text-muted-foreground text-sm">Loading teams…</div>
+        : filtered.length === 0 ? (
+          <div className="text-center py-12 text-muted-foreground">
+            <Users size={40} className="mx-auto mb-3 opacity-20" />
+            <p className="text-sm">No teams yet. Be the first to create one!</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filtered.map(team => {
+              const isMember = currentUserId ? team.members.includes(currentUserId) : false;
+              const isCreator = team.createdBy === currentUserId;
+              const isExpanded = expanded === team.id;
+              return (
+                <div key={team.id} className="bg-card border border-border rounded-2xl overflow-hidden">
+                  <div className="p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="font-black text-base" style={{ fontFamily: "'Roboto Slab',serif" }}>{team.name}</h3>
+                          <span className="bg-primary/20 text-primary text-xs font-semibold px-2 py-0.5 rounded-lg">{team.level}</span>
+                          {isMember && <span className="bg-green-400/20 text-green-400 text-xs font-semibold px-2 py-0.5 rounded-lg">✓ Member</span>}
+                        </div>
+                        {team.location && <p className="text-xs text-muted-foreground mt-0.5">📍 {team.location}</p>}
+                        {team.description && <p className="text-sm text-muted-foreground mt-1">{team.description}</p>}
+                        <p className="text-xs text-muted-foreground mt-1">{team.members.length} member{team.members.length !== 1 ? "s" : ""} · Created by {isCreator ? "you" : team.creatorName}</p>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {currentUserId && !isMember && <button onClick={() => handleJoin(team.id)} className="bg-primary text-primary-foreground text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-accent">Join</button>}
+                        {currentUserId && isMember && !isCreator && <button onClick={() => handleLeave(team.id)} className="bg-secondary text-muted-foreground text-xs font-semibold px-3 py-1.5 rounded-lg hover:text-foreground">Leave</button>}
+                        {isCreator && <button onClick={() => handleDelete(team.id)} className="text-muted-foreground hover:text-destructive p-1"><Trash2 size={14} /></button>}
+                        <button onClick={() => setExpanded(isExpanded ? null : team.id)} className="text-xs text-muted-foreground hover:text-primary">{isExpanded ? "Hide" : "Roster"}</button>
+                      </div>
+                    </div>
+                  </div>
+                  {isExpanded && (
+                    <div className="px-5 pb-4 border-t border-border pt-4">
+                      <p className="text-xs text-muted-foreground uppercase tracking-wide mb-3">Roster</p>
+                      {team.memberProfiles.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No profiles loaded yet.</p>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {team.memberProfiles.map(m => (
+                            <div key={m.userId} className="flex items-center gap-2 bg-secondary rounded-xl px-3 py-1.5">
+                              <div className="w-6 h-6 rounded-lg bg-primary/20 flex items-center justify-center text-xs font-black text-primary">{m.firstName[0]}{m.lastName[0]}</div>
+                              <span className="text-sm">{m.firstName} {m.lastName}</span>
+                              <span className="text-xs text-muted-foreground">{m.position}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+    </div>
+  );
+}
+
 function CommunityPage({ currentUserId, currentProfile, onBack }: { currentUserId?: string; currentProfile?: UserProfile | null; onBack?: () => void }) {
-  const [tab, setTab] = useState<"feed" | "players">("feed");
+  const [tab, setTab] = useState<"feed" | "players" | "teams">("feed");
   const [selected, setSelected] = useState<CommunityPlayer | null>(null);
 
   if (selected) return <PlayerProfileView player={selected} onBack={() => setSelected(null)} />;
@@ -361,14 +518,15 @@ function CommunityPage({ currentUserId, currentProfile, onBack }: { currentUserI
       <header className="border-b border-border px-6 py-5 max-w-5xl mx-auto flex items-center gap-3">
         {onBack && <button onClick={onBack} className="text-muted-foreground hover:text-foreground"><ChevronLeft size={20} /></button>}
         <span className="text-2xl">🏀</span>
-        <div><h1 className="text-xl font-black tracking-tight leading-none" style={{ fontFamily: "'Roboto Slab',serif" }}>COMMUNITY</h1><p className="text-xs text-muted-foreground uppercase tracking-widest">Players · Coaches · Scouts</p></div>
+        <div><h1 className="text-xl font-black tracking-tight leading-none" style={{ fontFamily: "'Roboto Slab',serif" }}>COMMUNITY</h1><p className="text-xs text-muted-foreground uppercase tracking-widest">Players · Teams · Coaches · Scouts</p></div>
       </header>
       <main className="max-w-5xl mx-auto px-6 py-6 space-y-5">
         <div className="flex gap-1 bg-card border border-border rounded-xl p-1 w-fit">
-          {(["feed", "players"] as const).map(t => <button key={t} onClick={() => setTab(t)} className={`px-5 py-2 rounded-lg text-sm font-semibold transition-colors capitalize ${tab === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>{t}</button>)}
+          {(["feed", "players", "teams"] as const).map(t => <button key={t} onClick={() => setTab(t)} className={`px-5 py-2 rounded-lg text-sm font-semibold transition-colors capitalize ${tab === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>{t}</button>)}
         </div>
-        {tab === "feed" && <FeedTab currentUserId={currentUserId} currentProfile={currentProfile} />}
+        {tab === "feed"    && <FeedTab currentUserId={currentUserId} currentProfile={currentProfile} />}
         {tab === "players" && <PlayersTab onSelect={setSelected} />}
+        {tab === "teams"   && <TeamsTab currentUserId={currentUserId} />}
       </main>
     </div>
   );
@@ -420,6 +578,12 @@ function PlayerProfileView({ player, onBack }: { player: CommunityPlayer; onBack
               {p.bio && <p className="text-sm text-muted-foreground mt-2">{p.bio}</p>}
             </div>
           </div>
+          {(p.strengths || p.weaknesses) && (
+            <div className="px-6 py-4 border-t border-border grid grid-cols-2 gap-4">
+              {p.strengths && <div><p className="text-xs text-primary uppercase tracking-wider font-semibold mb-1">💪 Strengths</p><p className="text-sm text-muted-foreground">{p.strengths}</p></div>}
+              {p.weaknesses && <div><p className="text-xs text-amber-400 uppercase tracking-wider font-semibold mb-1">🎯 Areas to Improve</p><p className="text-sm text-muted-foreground">{p.weaknesses}</p></div>}
+            </div>
+          )}
           {(p.height || p.weight || p.wingspan || p.vertical) && (
             <div className="px-6 py-4 border-t border-border grid grid-cols-4 gap-4 text-center">
               {[{ l: "Height", v: p.height }, { l: "Weight", v: p.weight ? `${p.weight} lbs` : "" }, { l: "Wingspan", v: p.wingspan }, { l: "Vertical", v: p.vertical ? `${p.vertical}"` : "" }].filter(m => m.v).map(m => (
@@ -468,20 +632,47 @@ function PlayerProfileView({ player, onBack }: { player: CommunityPlayer; onBack
 
 // ─── Login Screen ─────────────────────────────────────────────────────────────
 function LoginScreen() {
-  const [mode, setMode] = useState<"options" | "email" | "sent">("options");
-  const [email, setEmail] = useState(""), [loadingG, setLoadingG] = useState(false), [loadingE, setLoadingE] = useState(false), [error, setError] = useState("");
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; ok?: boolean } | null>(null);
 
-  async function handleGoogle() {
-    setLoadingG(true); setError("");
-    const { error } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.href } });
-    if (error) { setError("Google sign-in isn't set up yet. Please use Continue with Email instead — it works right now!"); setLoadingG(false); }
+  function reset() { setMsg(null); setPassword(""); }
+
+  async function handleSignIn(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true); setMsg(null);
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    if (error) {
+      if (error.message.toLowerCase().includes("invalid") || error.message.toLowerCase().includes("credentials")) {
+        setMsg({ text: "Wrong email or password. Double-check and try again, or create a new account." });
+      } else if (error.message.toLowerCase().includes("confirm") || error.message.toLowerCase().includes("verified")) {
+        setMsg({ text: "Your email isn't confirmed yet. Go to supabase.com/dashboard → Authentication → Settings and turn OFF \"Enable email confirmations\", then try again." });
+      } else {
+        setMsg({ text: error.message });
+      }
+      setLoading(false);
+    }
+    // success: onAuthStateChange handles the rest automatically
   }
-  async function handleEmail(e: React.FormEvent) {
-    e.preventDefault(); if (!email.trim()) return;
-    setLoadingE(true); setError("");
-    const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: window.location.href } });
-    if (error) { setError(error.message); setLoadingE(false); } else setMode("sent");
+
+  async function handleSignUp(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true); setMsg(null);
+    const { data, error } = await supabase.auth.signUp({ email: email.trim(), password });
+    if (error) {
+      setMsg({ text: error.message });
+      setLoading(false);
+    } else if (data.user && !data.session) {
+      // Email confirmation required
+      setMsg({ text: "⚠️ Account created but email confirmation is ON. Go to Supabase → Authentication → Settings → turn off \"Enable email confirmations\", then sign in." });
+      setLoading(false);
+    }
+    // If session exists, onAuthStateChange fires automatically → user is logged in
   }
+
+  const inputCls = "w-full bg-secondary border border-border rounded-xl px-4 py-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary transition-all";
 
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center px-6 relative" style={{ fontFamily: "'DM Sans',sans-serif" }}>
@@ -489,47 +680,59 @@ function LoginScreen() {
         <img src="https://images.unsplash.com/photo-1546519638-68e109498ffc?w=1400&h=900&fit=crop&auto=format" alt="" className="w-full h-full object-cover opacity-10" />
         <div className="absolute inset-0 bg-gradient-to-b from-background/80 via-background/60 to-background" />
       </div>
-      <div className="relative w-full max-w-sm flex flex-col gap-8">
-        <div className="flex flex-col items-center gap-4 text-center">
+      <div className="relative w-full max-w-sm flex flex-col gap-6">
+        {/* Logo */}
+        <div className="flex flex-col items-center gap-3 text-center">
           <span className="text-6xl">🏀</span>
-          <div><h1 className="text-4xl font-black tracking-tight" style={{ fontFamily: "'Roboto Slab',serif" }}>{APP_NAME}</h1><p className="text-muted-foreground mt-2">{APP_TAGLINE}</p></div>
+          <div>
+            <h1 className="text-4xl font-black tracking-tight" style={{ fontFamily: "'Roboto Slab',serif" }}>{APP_NAME}</h1>
+            <p className="text-muted-foreground mt-1 text-sm">{APP_TAGLINE}</p>
+          </div>
         </div>
-        <div className="bg-card border border-border rounded-2xl p-6 flex flex-col gap-4">
-          {mode === "sent" ? (
-            <div className="text-center py-4 flex flex-col gap-3">
-              <div className="text-4xl">📬</div>
-              <h2 className="font-bold text-lg">Check your email</h2>
-              <p className="text-sm text-muted-foreground">We sent a magic link to <strong className="text-foreground">{email}</strong>. Click it to sign in — no password needed.</p>
-              <button onClick={() => setMode("options")} className="text-xs text-muted-foreground hover:text-primary mt-2">Use a different email</button>
-            </div>
-          ) : mode === "email" ? (
-            <form onSubmit={handleEmail} className="flex flex-col gap-3">
-              <div><label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Your email</label>
-                <input autoFocus type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" required className="w-full bg-secondary border border-border rounded-xl px-4 py-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary" /></div>
-              {error && <p className="text-xs text-destructive bg-destructive/10 rounded-lg p-2">{error}</p>}
-              <button type="submit" disabled={loadingE} className="w-full bg-primary text-primary-foreground font-semibold py-3 rounded-xl hover:bg-accent disabled:opacity-50 text-sm">{loadingE ? "Sending…" : "Send Magic Link"}</button>
-              <button type="button" onClick={() => { setMode("options"); setError(""); }} className="text-xs text-muted-foreground hover:text-foreground text-center">← Back</button>
-            </form>
-          ) : (
-            <>
-              <button onClick={handleGoogle} disabled={loadingG} className="w-full flex items-center justify-center gap-3 bg-white text-gray-800 font-semibold py-3 px-4 rounded-xl hover:bg-gray-50 disabled:opacity-50 text-sm">
-                <svg width="18" height="18" viewBox="0 0 18 18">
-                  <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z" fill="#4285F4"/>
-                  <path d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/>
-                  <path d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z" fill="#FBBC05"/>
-                  <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 6.293C4.672 4.166 6.656 3.58 9 3.58z" fill="#EA4335"/>
-                </svg>
-                {loadingG ? "Redirecting…" : "Continue with Google"}
-              </button>
-              <div className="flex items-center gap-3"><div className="flex-1 h-px bg-border" /><span className="text-xs text-muted-foreground">or</span><div className="flex-1 h-px bg-border" /></div>
-              <button onClick={() => { setMode("email"); setError(""); }} className="w-full flex items-center justify-center gap-2 bg-secondary text-foreground font-semibold py-3 px-4 rounded-xl hover:bg-muted text-sm border border-border">✉️ Continue with Email</button>
-              {error && <p className="text-xs text-amber-400 bg-amber-400/10 rounded-lg p-3">{error}</p>}
-              <p className="text-xs text-center text-muted-foreground">Your stats are private by default.</p>
-            </>
-          )}
+
+        {/* Tab switcher */}
+        <div className="flex gap-1 bg-card border border-border rounded-xl p-1">
+          {(["signin", "signup"] as const).map(m => (
+            <button key={m} onClick={() => { setMode(m); reset(); }}
+              className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-colors ${mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+              {m === "signin" ? "Sign In" : "Create Account"}
+            </button>
+          ))}
         </div>
+
+        {/* Form */}
+        <div className="bg-card border border-border rounded-2xl p-6">
+          <form onSubmit={mode === "signin" ? handleSignIn : handleSignUp} className="flex flex-col gap-3">
+            <input
+              autoFocus type="email" value={email} onChange={e => setEmail(e.target.value)}
+              placeholder="Email address" required className={inputCls}
+            />
+            <input
+              type="password" value={password} onChange={e => setPassword(e.target.value)}
+              placeholder={mode === "signup" ? "Create a password (min 6 chars)" : "Password"}
+              required minLength={6} className={inputCls}
+            />
+            {msg && (
+              <p className={`text-xs rounded-xl p-3 leading-relaxed ${msg.ok ? "text-green-400 bg-green-400/10" : "text-amber-400 bg-amber-400/10"}`}>
+                {msg.text}
+              </p>
+            )}
+            <button type="submit" disabled={loading}
+              className="w-full bg-primary text-primary-foreground font-bold py-3 rounded-xl hover:bg-accent transition-colors disabled:opacity-40 text-sm mt-1">
+              {loading ? "Please wait…" : mode === "signin" ? "Sign In →" : "Create Account 🏀"}
+            </button>
+          </form>
+          <p className="text-xs text-center text-muted-foreground mt-4">
+            {mode === "signin" ? "New here? " : "Already have an account? "}
+            <button onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); reset(); }} className="text-primary hover:underline font-medium">
+              {mode === "signin" ? "Create account" : "Sign in"}
+            </button>
+          </p>
+        </div>
+
+        {/* Community access */}
         <button onClick={() => { const u = new URL(window.location.href); u.searchParams.set("view", "community"); window.location.href = u.toString(); }}
-          className="flex items-center justify-center gap-2 text-sm text-muted-foreground hover:text-primary">
+          className="flex items-center justify-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors">
           <Globe size={14} /> View Community Board (coaches &amp; scouts)
         </button>
       </div>
@@ -539,7 +742,7 @@ function LoginScreen() {
 
 // ─── Profile Setup ────────────────────────────────────────────────────────────
 function ProfileSetup({ userId, email, onComplete }: { userId: string; email: string; onComplete: (p: UserProfile) => void }) {
-  const [form, setForm] = useState({ firstName: "", lastName: "", position: "PG", gradYear: String(new Date().getFullYear() + 1), height: "", weight: "", wingspan: "", vertical: "", bio: "", isPublic: true });
+  const [form, setForm] = useState({ firstName: "", lastName: "", position: "PG", gradYear: String(new Date().getFullYear() + 1), height: "", weight: "", wingspan: "", vertical: "", bio: "", strengths: "", weaknesses: "", isPublic: true });
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
   const cls = "bg-secondary border border-border rounded-xl px-4 py-2.5 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary w-full";
   const lbl = "text-xs text-muted-foreground uppercase tracking-wider mb-1 block";
@@ -575,6 +778,10 @@ function ProfileSetup({ userId, email, onComplete }: { userId: string; email: st
             </div>
           </div>
           <div><label className={lbl}>Bio (optional)</label><textarea value={form.bio} onChange={e => set("bio", e.target.value)} placeholder="Tell coaches and scouts about yourself…" rows={2} className={`${cls} resize-none`} /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className={lbl}>Strengths (optional)</label><textarea value={form.strengths} onChange={e => set("strengths", e.target.value)} placeholder="e.g. Athleticism, handles, court vision…" rows={2} className={`${cls} resize-none`} /></div>
+            <div><label className={lbl}>Areas to Improve (optional)</label><textarea value={form.weaknesses} onChange={e => set("weaknesses", e.target.value)} placeholder="e.g. 3-point shooting, defense…" rows={2} className={`${cls} resize-none`} /></div>
+          </div>
           <label className="flex items-center gap-3 cursor-pointer">
             <div onClick={() => set("isPublic", !form.isPublic)} className={`w-10 h-6 rounded-full transition-colors relative ${form.isPublic ? "bg-primary" : "bg-muted"}`}>
               <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${form.isPublic ? "left-5" : "left-1"}`} />
@@ -693,13 +900,42 @@ export default function App() {
   }, [playerIdParam]);
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) { setAuthState("unauthenticated"); return; }
-      const uid = session.user.id;
-      setUserId(uid); setUserEmail(session.user.email || "");
+    async function loadUser(uid: string, email: string) {
+      setUserId(uid); setUserEmail(email);
+      // 1. Try localStorage first (instant)
       const lp = localProfile(uid);
-      if (lp) { setProfile(lp); setData(localData(uid) || emptyData()); setAuthState("ready"); }
-      else setAuthState("needs_profile");
+      if (lp) {
+        setProfile(lp); setData(localData(uid) || emptyData()); setAuthState("ready");
+        return;
+      }
+      // 2. Fetch from server (new device or cleared cache)
+      try {
+        const res = await fetch(`${SERVER}/profile/${uid}`, { signal: AbortSignal.timeout(6000) });
+        const json = await res.json();
+        if (json.profile) {
+          saveLocalProfile(json.profile);
+          const gdRes = await fetch(`${SERVER}/gamedata/${uid}`, { signal: AbortSignal.timeout(6000) });
+          const gdJson = await gdRes.json();
+          if (gdJson.data) saveLocalData(uid, gdJson.data);
+          setProfile(json.profile);
+          setData(gdJson.data || emptyData());
+          setAuthState("ready");
+          return;
+        }
+      } catch {}
+      // 3. No profile found anywhere — new user needs to set up
+      setAuthState("needs_profile");
+    }
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT" || !session) {
+        setAuthState("unauthenticated");
+        setUserId(null); setProfile(null);
+        return;
+      }
+      if (event === "SIGNED_IN" || event === "INITIAL_SESSION" || event === "TOKEN_REFRESHED") {
+        loadUser(session.user.id, session.user.email || "");
+      }
     });
     return () => subscription.unsubscribe();
   }, []);
