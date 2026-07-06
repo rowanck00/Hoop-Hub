@@ -1,7 +1,7 @@
 
-  # Hoop Hub
+  # Rowans practice
 
-  This is a code bundle for Hoop Hub. The original project is available at https://www.figma.com/design/s8y125w9EoJdItyJgLkHy3/Hoop-Hub.
+  This is a code bundle for Rowans practice. The original project is available at https://www.figma.com/design/s8y125w9EoJdItyJgLkHy3/Rowans-practice.
 
   ## Running the code
 
