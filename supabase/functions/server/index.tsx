@@ -7,7 +7,7 @@ const app = new Hono();
 app.use("*", logger(console.log));
 app.use("/*", cors({
   origin: "*",
-  allowHeaders: ["Content-Type", "Authorization"],
+  allowHeaders: ["Content-Type", "Authorization", "apikey"],
   allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   exposeHeaders: ["Content-Length"],
   maxAge: 600,
@@ -202,7 +202,7 @@ app.get("/make-server-4cb0fb87/posts", async (c) => {
   const allPosts = await kv.getByPrefix("post_");
   const topLevel = allPosts
     .filter((p: any) => p && !p.replyTo)
-    .sort((a: any, b: any) => scorePost(b) - scorePost(a)) // relevance sort
+    .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, 60);
 
   const enriched = await Promise.all(topLevel.map(async (post: any) => {

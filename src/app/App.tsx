@@ -118,9 +118,14 @@ const GRAD_YEARS = Array.from({ length: 10 }, (_, i) => String(new Date().getFul
 // ─── Local Storage (instant, no network) ──────────────────────────────────────
 const lsGet = (k: string) => { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : null; } catch { return null; } };
 const lsSet = (k: string, v: any) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+const emailKey = (email: string) => email.trim().toLowerCase();
 const localProfile = (uid: string) => lsGet(`hh_profile_${uid}`);
+const localProfileByEmail = (email: string) => email ? lsGet(`hh_profile_email_${emailKey(email)}`) : null;
 const localData    = (uid: string) => lsGet(`hh_data_${uid}`);
-const saveLocalProfile = (p: UserProfile) => lsSet(`hh_profile_${p.userId}`, p);
+const saveLocalProfile = (p: UserProfile) => {
+  lsSet(`hh_profile_${p.userId}`, p);
+  if (p.email) lsSet(`hh_profile_email_${emailKey(p.email)}`, p);
+};
 const saveLocalData    = (uid: string, d: AppData) => lsSet(`hh_data_${uid}`, d);
 
 // ─── Background API (never blocks the UI) ────────────────────────────────────
@@ -133,11 +138,11 @@ const bgData = (userId: string, d: AppData) =>
   bg(`${SERVER}/gamedata`, { method: "POST", body: JSON.stringify({ userId, data: d }) });
 
 async function apiFetch<T>(path: string, fallback: T): Promise<T> {
-  try { const r = await fetch(`${SERVER}${path}`, { signal: AbortSignal.timeout(12000), headers: { "Authorization": `Bearer ${supabaseAnonKey}`, "apikey": supabaseAnonKey } }); return await r.json(); }
+  try { const r = await fetch(`${SERVER}${path}`, { signal: AbortSignal.timeout(12000), headers: { "Authorization": `Bearer ${supabaseAnonKey}`, "apikey": supabaseAnonKey } }); return r.ok ? await r.json() : fallback as any; }
   catch { return fallback as any; }
 }
 async function apiPost(path: string, body: any) {
-  try { const r = await fetch(`${SERVER}${path}`, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${supabaseAnonKey}`, "apikey": supabaseAnonKey }, body: JSON.stringify(body), signal: AbortSignal.timeout(12000) }); return await r.json(); }
+  try { const r = await fetch(`${SERVER}${path}`, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${supabaseAnonKey}`, "apikey": supabaseAnonKey }, body: JSON.stringify(body), signal: AbortSignal.timeout(12000) }); return r.ok ? await r.json() : null; }
   catch { return null; }
 }
 
@@ -271,18 +276,22 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
   onPost: (p: PostData) => void; onCancel?: () => void;
 }) {
   const [content, setContent] = useState(""), [videoUrl, setVideoUrl] = useState(""), [showVideo, setShowVideo] = useState(false), [posting, setPosting] = useState(false);
+  const [error, setError] = useState("");
   const videoId = extractYTId(videoUrl);
   const canPost = content.trim().length > 0 || !!videoId;
 
   async function submit() {
     if (!canPost || posting) return;
-    setPosting(true);
+    setPosting(true); setError("");
     const res = await apiPost("/posts", { userId: profile.userId, content: content.trim(), videoUrl: videoId ? videoUrl : null, replyTo: replyTo?.id ?? null, quotedPostId: quotedPost?.id ?? null });
     if (res?.post) {
       res.post.profile = { firstName: profile.firstName, lastName: profile.lastName, position: profile.position };
       onPost(res.post);
+      setContent(""); setVideoUrl(""); setShowVideo(false);
+    } else {
+      setError("Post did not save. Check your connection and try again.");
     }
-    setContent(""); setVideoUrl(""); setShowVideo(false); setPosting(false);
+    setPosting(false);
   }
 
   return (
@@ -306,6 +315,7 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
         </div>
       )}
       {quotedPost && <QuotedPost post={quotedPost} />}
+      {error && <p className="text-xs text-amber-400 bg-amber-400/10 border border-amber-400/20 rounded-lg px-3 py-2">{error}</p>}
       <div className="flex items-center justify-between pt-1 border-t border-border">
         <button onClick={() => setShowVideo(v => !v)} className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-colors ${showVideo ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-primary hover:bg-primary/10"}`}>
           <Video size={13} /> Video
@@ -700,6 +710,9 @@ function CommunityPage({ currentUserId, currentProfile, onBack }: { currentUserI
   const [selected, setSelected] = useState<CommunityPlayer | null>(null);
 
   const currentUserName = currentProfile ? `${currentProfile.firstName} ${currentProfile.lastName}`.trim() : undefined;
+  const myPlayer: CommunityPlayer | null = currentUserId && currentProfile
+    ? { userId: currentUserId, profile: currentProfile, summary: { streak: 0, shootingPct: 0, totalMinutes: 0, activeDays: 0 } }
+    : null;
   if (selected) return <PlayerProfileView player={selected} onBack={() => setSelected(null)} currentUserId={currentUserId} currentUserName={currentUserName} currentProfile={currentProfile} />;
 
   return (
@@ -710,8 +723,15 @@ function CommunityPage({ currentUserId, currentProfile, onBack }: { currentUserI
         <div><h1 className="text-xl font-black tracking-tight leading-none" style={{ fontFamily: "'Roboto Slab',serif" }}>COMMUNITY</h1><p className="text-xs text-muted-foreground uppercase tracking-widest">Players · Teams · Coaches · Scouts</p></div>
       </header>
       <main className="max-w-5xl mx-auto px-6 py-6 space-y-5">
-        <div className="flex gap-1 bg-card border border-border rounded-xl p-1 w-fit">
-          {(["feed", "players", "teams"] as const).map(t => <button key={t} onClick={() => setTab(t)} className={`px-5 py-2 rounded-lg text-sm font-semibold transition-colors capitalize ${tab === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>{t}</button>)}
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="flex gap-1 bg-card border border-border rounded-xl p-1 w-fit">
+            {(["feed", "players", "teams"] as const).map(t => <button key={t} onClick={() => setTab(t)} className={`px-5 py-2 rounded-lg text-sm font-semibold transition-colors capitalize ${tab === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>{t}</button>)}
+          </div>
+          {myPlayer && (
+            <button onClick={() => setSelected(myPlayer)} className="w-fit flex items-center gap-2 bg-secondary text-secondary-foreground border border-border rounded-xl px-4 py-2 text-sm font-semibold hover:border-primary hover:text-primary transition-colors">
+              <Users size={14} /> My Profile
+            </button>
+          )}
         </div>
         {tab === "feed"    && <FeedTab currentUserId={currentUserId} currentProfile={currentProfile} />}
         {tab === "players" && <PlayersTab onSelect={setSelected} />}
@@ -1235,9 +1255,11 @@ export default function App() {
     async function loadUser(uid: string, email: string) {
       setUserId(uid); setUserEmail(email);
       // 1. Try localStorage first (instant)
-      const lp = localProfile(uid);
+      const storedProfile = localProfile(uid) || localProfileByEmail(email);
+      const lp = storedProfile ? { ...storedProfile, userId: uid, email: storedProfile.email || email } : null;
       const ld = localData(uid);
       if (lp) {
+        saveLocalProfile(lp);
         setProfile(lp); setData(ld || emptyData()); setAuthState("ready");
         fetchNotifs(uid).then(n => setUnreadCount(n.filter((x: any) => !x.read).length)).catch(() => {});
       }
