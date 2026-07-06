@@ -138,10 +138,16 @@ async function apiPost(path: string, body: any) {
   catch { return null; }
 }
 
-const fetchTeams = async (): Promise<Team[]> => { const d = await apiFetch<{teams: Team[]}>("/teams", {teams:[]}); return d.teams ?? []; };
-const createTeam = (body: any) => apiPost("/teams", body);
-const joinTeam   = (id: string, userId: string) => apiPost(`/teams/${id}/join`, { userId });
-const leaveTeam  = (id: string, userId: string) => apiPost(`/teams/${id}/leave`, { userId });
+const fetchTeams    = async (): Promise<Team[]> => { const d = await apiFetch<{teams: Team[]}>("/teams", {teams:[]}); return d.teams ?? []; };
+const createTeam    = (body: any) => apiPost("/teams", body);
+const joinTeam      = (id: string, userId: string) => apiPost(`/teams/${id}/join`, { userId });
+const leaveTeam     = (id: string, userId: string) => apiPost(`/teams/${id}/leave`, { userId });
+const searchUsers   = async (q: string) => { const d = await apiFetch<{users: TaggedUser[]}>(`/users/search?q=${encodeURIComponent(q)}`, {users:[]}); return d.users ?? []; };
+const followUser    = (followerId: string, followeeId: string, followerName: string) => apiPost("/follow", { followerId, followeeId, followerName });
+const unfollowUser  = (followerId: string, followeeId: string) => apiPost("/unfollow", { followerId, followeeId });
+const fetchSocial   = async (userId: string) => apiFetch<{following:string[];followers:string[];followingCount:number;followersCount:number}>(`/social/${userId}`, {following:[],followers:[],followingCount:0,followersCount:0});
+const fetchNotifs   = async (userId: string) => { const d = await apiFetch<{notifications: any[]}>(`/notifications/${userId}`, {notifications:[]}); return d.notifications ?? []; };
+const markNotifsRead = (userId: string) => apiPost(`/notifications/${userId}/read`, {});
 const deleteTeam = (id: string) => bg(`${SERVER}/teams/${id}`, { method: "DELETE" });
 
 // ─── Chart Tip ────────────────────────────────────────────────────────────────
@@ -176,8 +182,8 @@ const QuotedPost = ({ post }: { post: PostData }) => (
 );
 
 // ─── Post Card ────────────────────────────────────────────────────────────────
-function PostCard({ post, currentUserId, onReply, onQuote, onUpdate, onDelete, isReply = false }: {
-  post: PostData; currentUserId?: string;
+function PostCard({ post, currentUserId, currentUserName, onReply, onQuote, onUpdate, onDelete, isReply = false }: {
+  post: PostData; currentUserId?: string; currentUserName?: string;
   onReply: (p: PostData) => void; onQuote: (p: PostData) => void;
   onUpdate: (p: PostData) => void; onDelete: (id: string) => void; isReply?: boolean;
 }) {
@@ -189,12 +195,12 @@ function PostCard({ post, currentUserId, onReply, onQuote, onUpdate, onDelete, i
 
   async function handleLike() {
     if (!currentUserId) return;
-    const res = await apiPost(`/posts/${post.id}/like`, { userId: currentUserId });
+    const res = await apiPost(`/posts/${post.id}/like`, { userId: currentUserId, userName: currentUserName });
     if (res) onUpdate({ ...post, likes: res.liked ? [...post.likes, currentUserId] : post.likes.filter(id => id !== currentUserId), likeCount: res.likeCount });
   }
   async function handleRepost() {
     if (!currentUserId) return;
-    const res = await apiPost(`/posts/${post.id}/repost`, { userId: currentUserId });
+    const res = await apiPost(`/posts/${post.id}/repost`, { userId: currentUserId, userName: currentUserName });
     if (res) onUpdate({ ...post, reposts: res.reposted ? [...post.reposts, currentUserId] : post.reposts.filter(id => id !== currentUserId), repostCount: res.repostCount });
   }
   async function handleShowReplies() {
@@ -316,6 +322,7 @@ function FeedTab({ currentUserId, currentProfile }: { currentUserId?: string; cu
   const [loading, setLoading] = useState(true);
   const [replyTarget, setReplyTarget] = useState<PostData | null>(null);
   const [quoteTarget, setQuoteTarget] = useState<PostData | null>(null);
+  const currentUserName = currentProfile ? `${currentProfile.firstName} ${currentProfile.lastName}`.trim() : undefined;
 
   useEffect(() => {
     apiFetch<{ posts: PostData[] }>("/posts", { posts: [] }).then(d => { setPosts(d.posts ?? []); setLoading(false); });
@@ -332,7 +339,7 @@ function FeedTab({ currentUserId, currentProfile }: { currentUserId?: string; cu
       {loading ? <div className="text-center py-12 text-muted-foreground text-sm">Loading feed…</div>
         : posts.length === 0 ? <div className="text-center py-12 text-muted-foreground"><MessageCircle size={40} className="mx-auto mb-3 opacity-20" /><p className="text-sm">No posts yet. Be the first!</p></div>
         : <div className="space-y-3">{posts.map(post => (
-          <PostCard key={post.id} post={post} currentUserId={currentUserId}
+          <PostCard key={post.id} post={post} currentUserId={currentUserId} currentUserName={currentUserName}
             onReply={p => { setQuoteTarget(null); setReplyTarget(p); }}
             onQuote={p => { setReplyTarget(null); setQuoteTarget(p); }}
             onUpdate={u => setPosts(prev => prev.map(p => p.id === u.id ? u : p))}
@@ -531,11 +538,90 @@ function TeamsTab({ currentUserId }: { currentUserId?: string }) {
   );
 }
 
+// ─── Notifications Panel ──────────────────────────────────────────────────────
+function NotifPanel({ userId, onClose }: { userId: string; onClose: () => void }) {
+  const [notifs, setNotifs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchNotifs(userId).then(n => { setNotifs(n); setLoading(false); });
+    markNotifsRead(userId).catch(() => {});
+  }, [userId]);
+
+  const icons: Record<string, string> = { like: "❤️", repost: "🔄", reply: "💬", follow: "👤", tag: "🏷️" };
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/50" />
+      <div className="relative w-full max-w-sm bg-card border-l border-border h-full overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border sticky top-0 bg-card">
+          <h2 className="font-black text-lg" style={{ fontFamily: "'Roboto Slab',serif" }}>Notifications</h2>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X size={20} /></button>
+        </div>
+        {loading ? <div className="text-center py-12 text-muted-foreground text-sm">Loading…</div>
+          : notifs.length === 0 ? (
+            <div className="text-center py-16 text-muted-foreground">
+              <p className="text-3xl mb-3">🔔</p>
+              <p className="text-sm">No notifications yet</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {notifs.map(n => (
+                <div key={n.id} className={`px-5 py-4 flex items-start gap-3 ${!n.read ? "bg-primary/5" : ""}`}>
+                  <span className="text-xl flex-shrink-0">{icons[n.type] || "🔔"}</span>
+                  <div>
+                    <p className="text-sm">{n.message}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{timeAgo(n.createdAt)}</p>
+                  </div>
+                  {!n.read && <div className="w-2 h-2 rounded-full bg-primary flex-shrink-0 mt-1.5" />}
+                </div>
+              ))}
+            </div>
+          )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Follow Button ────────────────────────────────────────────────────────────
+function FollowButton({ currentUserId, currentUserName, targetUserId }: { currentUserId?: string; currentUserName?: string; targetUserId: string }) {
+  const [following, setFollowing] = useState<boolean | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!currentUserId) return;
+    fetchSocial(currentUserId).then(s => setFollowing(s.following.includes(targetUserId)));
+  }, [currentUserId, targetUserId]);
+
+  if (!currentUserId || currentUserId === targetUserId || following === null) return null;
+
+  async function toggle() {
+    if (!currentUserId || loading) return;
+    setLoading(true);
+    if (following) {
+      await unfollowUser(currentUserId, targetUserId);
+      setFollowing(false);
+    } else {
+      await followUser(currentUserId, targetUserId, currentUserName || "Someone");
+      setFollowing(true);
+    }
+    setLoading(false);
+  }
+
+  return (
+    <button onClick={toggle} disabled={loading}
+      className={`flex items-center gap-1.5 text-xs font-semibold px-4 py-2 rounded-xl transition-colors ${following ? "bg-secondary text-muted-foreground hover:text-destructive hover:bg-destructive/10" : "bg-primary text-primary-foreground hover:bg-accent"}`}>
+      {loading ? "…" : following ? "Following" : "Follow"}
+    </button>
+  );
+}
+
 function CommunityPage({ currentUserId, currentProfile, onBack }: { currentUserId?: string; currentProfile?: UserProfile | null; onBack?: () => void }) {
   const [tab, setTab] = useState<"feed" | "players" | "teams">("feed");
   const [selected, setSelected] = useState<CommunityPlayer | null>(null);
 
-  if (selected) return <PlayerProfileView player={selected} onBack={() => setSelected(null)} />;
+  const currentUserName = currentProfile ? `${currentProfile.firstName} ${currentProfile.lastName}`.trim() : undefined;
+  if (selected) return <PlayerProfileView player={selected} onBack={() => setSelected(null)} currentUserId={currentUserId} currentUserName={currentUserName} />;
 
   return (
     <div className="min-h-screen bg-background" style={{ fontFamily: "'DM Sans',sans-serif" }}>
@@ -557,7 +643,7 @@ function CommunityPage({ currentUserId, currentProfile, onBack }: { currentUserI
 }
 
 // ─── Player Profile View ──────────────────────────────────────────────────────
-function PlayerProfileView({ player, onBack }: { player: CommunityPlayer; onBack?: () => void }) {
+function PlayerProfileView({ player, onBack, currentUserId, currentUserName }: { player: CommunityPlayer; onBack?: () => void; currentUserId?: string; currentUserName?: string; }) {
   const [gameData, setGameData] = useState<AppData | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -585,9 +671,12 @@ function PlayerProfileView({ player, onBack }: { player: CommunityPlayer; onBack
           <span className="text-2xl">🏀</span>
           <div><h1 className="text-xl font-black leading-none" style={{ fontFamily: "'Roboto Slab',serif" }}>{p.firstName.toUpperCase()} {p.lastName.toUpperCase()}</h1><p className="text-xs text-muted-foreground uppercase tracking-widest">Player Profile</p></div>
         </div>
-        <button onClick={copyLink} className="flex items-center gap-2 text-xs bg-card border border-border rounded-xl px-3 py-2 hover:border-primary hover:text-primary transition-all">
-          {copied ? <Check size={13} /> : <Copy size={13} />}{copied ? "Copied!" : "Share"}
-        </button>
+        <div className="flex items-center gap-2">
+          <FollowButton currentUserId={currentUserId} currentUserName={currentUserName} targetUserId={player.userId} />
+          <button onClick={copyLink} className="flex items-center gap-2 text-xs bg-card border border-border rounded-xl px-3 py-2 hover:border-primary hover:text-primary transition-all">
+            {copied ? <Check size={13} /> : <Copy size={13} />}{copied ? "Copied!" : "Share"}
+          </button>
+        </div>
       </header>
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
         <div className="bg-card border border-border rounded-2xl overflow-hidden">
@@ -822,6 +911,17 @@ function ProfileSetup({ userId, email, onComplete }: { userId: string; email: st
 }
 
 // ─── Training View ────────────────────────────────────────────────────────────
+function ViewHero({ img, title, sub }: { img: string; title: string; sub: string }) {
+  return (
+    <div className="relative rounded-2xl overflow-hidden h-36 bg-zinc-900">
+      <img src={`https://images.unsplash.com/photo-${img}?w=1200&h=300&fit=crop&auto=format`} alt={title} className="w-full h-full object-cover opacity-50" />
+      <div className="absolute inset-0 bg-gradient-to-r from-black/70 to-transparent flex items-end p-5">
+        <div><p className="text-xs uppercase tracking-widest text-primary font-medium mb-0.5">{sub}</p><h2 className="text-2xl font-black text-white leading-none" style={{ fontFamily: "'Roboto Slab',serif" }}>{title}</h2></div>
+      </div>
+    </div>
+  );
+}
+
 function TrainingView({ data }: { data: AppData }) {
   const weeklyData = Array.from({ length: 8 }, (_, wi) => {
     const wS = 7 * (7 - wi), wE = wS - 7;
@@ -839,6 +939,7 @@ function TrainingView({ data }: { data: AppData }) {
   const heatBg = ["#1e1e20","rgba(249,115,22,0.2)","rgba(249,115,22,0.4)","rgba(249,115,22,0.7)","#f97316"];
   return (
     <div className="space-y-6">
+      <ViewHero img="1606048033063-fe28cdad4f35" title="Training" sub="Long-term progress" />
       <div className="bg-card border border-border rounded-2xl p-6">
         <div className="flex items-center gap-2 mb-5"><Clock size={14} className="text-primary" /><span className="text-xs uppercase tracking-wider text-muted-foreground">Weekly Volume (last 8 weeks)</span></div>
         <div className="h-52"><ResponsiveContainer width="100%" height="100%"><BarChart id="t-weekly" data={weeklyData} barSize={28} margin={{ top:4,right:4,bottom:0,left:-20 }}>
@@ -881,6 +982,7 @@ function StrengthView({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData
   const last = ex.history.length?ex.history[ex.history.length-1].weight:null;
   return (
     <div className="space-y-6">
+      <ViewHero img="1534438327776-3db31fd82e9a" title="Strength" sub="Track your lifts" />
       <div className="flex flex-wrap gap-2">
         {data.strength.map((e,i)=><button key={i} onClick={()=>{setSel(i);setAdding(false);}} className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${i===sel?"bg-primary text-primary-foreground":"bg-secondary text-secondary-foreground hover:bg-muted"}`}>{e.name}</button>)}
         {addEx?(<div className="flex items-center gap-2"><input autoFocus value={exName} onChange={e=>setExName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveEx()} placeholder="Exercise name" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none w-36" /><button onClick={saveEx} className="bg-primary text-primary-foreground rounded-xl p-2"><Check size={14}/></button><button onClick={()=>{setAddEx(false);setExName("");}} className="bg-secondary rounded-xl p-2"><X size={14}/></button></div>)
@@ -986,6 +1088,8 @@ export default function App() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [shotMade, setShotMade] = useState(0), [shotAtt, setShotAtt] = useState(0), [shotMode, setShotMode] = useState(false);
   const [streakPulse, setStreakPulse] = useState(false);
+  const [showNotifs, setShowNotifs] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [sharedPlayer, setSharedPlayer] = useState<CommunityPlayer | null>(null);
 
   const urlParams = new URLSearchParams(window.location.search);
@@ -1006,6 +1110,8 @@ export default function App() {
       const lp = localProfile(uid);
       if (lp) {
         setProfile(lp); setData(localData(uid) || emptyData()); setAuthState("ready");
+        // Check unread notifications
+        fetchNotifs(uid).then(n => setUnreadCount(n.filter((x: any) => !x.read).length)).catch(() => {});
         return;
       }
       // 2. Fetch from server (new device or cleared cache)
@@ -1119,9 +1225,15 @@ export default function App() {
         <div className="flex items-center gap-3">
           <button onClick={copyShareLink} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary"><ExternalLink size={13}/> Share</button>
           <button onClick={()=>setView("community")} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary"><Users size={13}/> Community</button>
+          {/* Notification bell */}
+          <button onClick={() => setShowNotifs(true)} className="relative text-muted-foreground hover:text-primary transition-colors">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            {unreadCount > 0 && <span className="absolute -top-1 -right-1 w-4 h-4 bg-primary text-primary-foreground text-xs rounded-full flex items-center justify-center font-bold">{unreadCount > 9 ? "9+" : unreadCount}</span>}
+          </button>
           <button onClick={handleLogout} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"><LogOut size={13}/> Sign Out</button>
         </div>
       </header>
+      {showNotifs && userId && <NotifPanel userId={userId} onClose={() => { setShowNotifs(false); setUnreadCount(0); }} />}
 
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
         {view==="training" && <TrainingView data={data}/>}
