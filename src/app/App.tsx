@@ -468,19 +468,26 @@ function PlayerProfileView({ player, onBack }: { player: CommunityPlayer; onBack
 
 // ─── Login Screen ─────────────────────────────────────────────────────────────
 function LoginScreen() {
-  const [mode, setMode] = useState<"options" | "email" | "sent">("options");
-  const [email, setEmail] = useState(""), [loadingG, setLoadingG] = useState(false), [loadingE, setLoadingE] = useState(false), [error, setError] = useState("");
+  const [sent, setSent] = useState(false);
+  const [email, setEmail] = useState(""), [loading, setLoading] = useState(false), [error, setError] = useState("");
 
-  async function handleGoogle() {
-    setLoadingG(true); setError("");
-    const { error } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.href } });
-    if (error) { setError("Google sign-in isn't set up yet. Please use Continue with Email instead — it works right now!"); setLoadingG(false); }
-  }
   async function handleEmail(e: React.FormEvent) {
     e.preventDefault(); if (!email.trim()) return;
-    setLoadingE(true); setError("");
-    const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: window.location.href } });
-    if (error) { setError(error.message); setLoadingE(false); } else setMode("sent");
+    setLoading(true); setError("");
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
+      options: { emailRedirectTo: window.location.origin },
+    });
+    if (error) {
+      if (error.message.includes("rate") || error.message.includes("limit")) {
+        setError("Too many attempts — please wait a few minutes then try again, or check your inbox for a previous link.");
+      } else {
+        setError(error.message);
+      }
+      setLoading(false);
+    } else {
+      setSent(true);
+    }
   }
 
   return (
@@ -495,37 +502,28 @@ function LoginScreen() {
           <div><h1 className="text-4xl font-black tracking-tight" style={{ fontFamily: "'Roboto Slab',serif" }}>{APP_NAME}</h1><p className="text-muted-foreground mt-2">{APP_TAGLINE}</p></div>
         </div>
         <div className="bg-card border border-border rounded-2xl p-6 flex flex-col gap-4">
-          {mode === "sent" ? (
+          {sent ? (
             <div className="text-center py-4 flex flex-col gap-3">
               <div className="text-4xl">📬</div>
               <h2 className="font-bold text-lg">Check your email</h2>
-              <p className="text-sm text-muted-foreground">We sent a magic link to <strong className="text-foreground">{email}</strong>. Click it to sign in — no password needed.</p>
-              <button onClick={() => setMode("options")} className="text-xs text-muted-foreground hover:text-primary mt-2">Use a different email</button>
+              <p className="text-sm text-muted-foreground">We sent a sign-in link to <strong className="text-foreground">{email}</strong>. Click it to get in — stays logged in after that.</p>
+              <button onClick={() => { setSent(false); setError(""); }} className="text-xs text-muted-foreground hover:text-primary mt-2">Use a different email</button>
             </div>
-          ) : mode === "email" ? (
-            <form onSubmit={handleEmail} className="flex flex-col gap-3">
-              <div><label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Your email</label>
-                <input autoFocus type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" required className="w-full bg-secondary border border-border rounded-xl px-4 py-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary" /></div>
-              {error && <p className="text-xs text-destructive bg-destructive/10 rounded-lg p-2">{error}</p>}
-              <button type="submit" disabled={loadingE} className="w-full bg-primary text-primary-foreground font-semibold py-3 rounded-xl hover:bg-accent disabled:opacity-50 text-sm">{loadingE ? "Sending…" : "Send Magic Link"}</button>
-              <button type="button" onClick={() => { setMode("options"); setError(""); }} className="text-xs text-muted-foreground hover:text-foreground text-center">← Back</button>
-            </form>
           ) : (
-            <>
-              <button onClick={handleGoogle} disabled={loadingG} className="w-full flex items-center justify-center gap-3 bg-white text-gray-800 font-semibold py-3 px-4 rounded-xl hover:bg-gray-50 disabled:opacity-50 text-sm">
-                <svg width="18" height="18" viewBox="0 0 18 18">
-                  <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z" fill="#4285F4"/>
-                  <path d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/>
-                  <path d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z" fill="#FBBC05"/>
-                  <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 6.293C4.672 4.166 6.656 3.58 9 3.58z" fill="#EA4335"/>
-                </svg>
-                {loadingG ? "Redirecting…" : "Continue with Google"}
+            <form onSubmit={handleEmail} className="flex flex-col gap-4">
+              <div>
+                <h2 className="font-bold text-base mb-1">Sign in with your email</h2>
+                <p className="text-xs text-muted-foreground mb-3">We&apos;ll send you a one-time link. No password needed, and you stay logged in.</p>
+                <input autoFocus type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" required
+                  className="w-full bg-secondary border border-border rounded-xl px-4 py-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary" />
+              </div>
+              {error && <p className="text-xs text-amber-400 bg-amber-400/10 rounded-lg p-3 leading-relaxed">{error}</p>}
+              <button type="submit" disabled={loading}
+                className="w-full bg-primary text-primary-foreground font-semibold py-3 rounded-xl hover:bg-accent disabled:opacity-50 text-sm">
+                {loading ? "Sending…" : "Send Sign-in Link ✉️"}
               </button>
-              <div className="flex items-center gap-3"><div className="flex-1 h-px bg-border" /><span className="text-xs text-muted-foreground">or</span><div className="flex-1 h-px bg-border" /></div>
-              <button onClick={() => { setMode("email"); setError(""); }} className="w-full flex items-center justify-center gap-2 bg-secondary text-foreground font-semibold py-3 px-4 rounded-xl hover:bg-muted text-sm border border-border">✉️ Continue with Email</button>
-              {error && <p className="text-xs text-amber-400 bg-amber-400/10 rounded-lg p-3">{error}</p>}
               <p className="text-xs text-center text-muted-foreground">Your stats are private by default.</p>
-            </>
+            </form>
           )}
         </div>
         <button onClick={() => { const u = new URL(window.location.href); u.searchParams.set("view", "community"); window.location.href = u.toString(); }}
@@ -693,14 +691,17 @@ export default function App() {
   }, [playerIdParam]);
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    function handleSession(session: any) {
       if (!session) { setAuthState("unauthenticated"); return; }
       const uid = session.user.id;
       setUserId(uid); setUserEmail(session.user.email || "");
       const lp = localProfile(uid);
       if (lp) { setProfile(lp); setData(localData(uid) || emptyData()); setAuthState("ready"); }
       else setAuthState("needs_profile");
-    });
+    }
+    // Check for existing session on load (keeps users logged in)
+    supabase.auth.getSession().then(({ data: { session } }) => handleSession(session));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => handleSession(session));
     return () => subscription.unsubscribe();
   }, []);
 
