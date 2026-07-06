@@ -4,6 +4,7 @@ import {
   Play, Pause, Check, X, ChevronLeft, Dumbbell, ArrowRight,
   LogOut, Users, Globe, Copy, ExternalLink, Search,
   Heart, MessageCircle, Repeat2, Quote, Trash2, Video,
+  Activity, Trophy, Edit3,
 } from "lucide-react";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis,
@@ -34,6 +35,7 @@ interface Team {
   createdAt: string;
 }
 interface MiniProfile { firstName: string; lastName: string; position: string; }
+interface TaggedUser extends MiniProfile { userId: string; }
 interface PostData {
   id: string; userId: string; content: string;
   videoUrl?: string; videoId?: string;
@@ -149,6 +151,8 @@ const fetchSocial   = async (userId: string) => apiFetch<{following:string[];fol
 const fetchNotifs   = async (userId: string) => { const d = await apiFetch<{notifications: any[]}>(`/notifications/${userId}`, {notifications:[]}); return d.notifications ?? []; };
 const markNotifsRead = (userId: string) => apiPost(`/notifications/${userId}/read`, {});
 const deleteTeam = (id: string) => bg(`${SERVER}/teams/${id}`, { method: "DELETE" });
+const fetchUserPosts = async (userId: string) => { const d = await apiFetch<{posts: PostData[]}>(`/posts/user/${userId}`, {posts:[]}); return d.posts ?? []; };
+const fetchPost = async (postId: string) => { const d = await apiFetch<{post: PostData | null}>(`/posts/${postId}`, {post:null}); return d.post; };
 
 // ─── Chart Tip ────────────────────────────────────────────────────────────────
 const ChartTip = ({ active, payload, label, unit = "" }: any) => {
@@ -182,10 +186,10 @@ const QuotedPost = ({ post }: { post: PostData }) => (
 );
 
 // ─── Post Card ────────────────────────────────────────────────────────────────
-function PostCard({ post, currentUserId, currentUserName, onReply, onQuote, onUpdate, onDelete, isReply = false }: {
+function PostCard({ post, currentUserId, currentUserName, onReply, onQuote, onUpdate, onDelete, onOpen, isReply = false }: {
   post: PostData; currentUserId?: string; currentUserName?: string;
   onReply: (p: PostData) => void; onQuote: (p: PostData) => void;
-  onUpdate: (p: PostData) => void; onDelete: (id: string) => void; isReply?: boolean;
+  onUpdate: (p: PostData) => void; onDelete: (id: string) => void; onOpen?: (p: PostData) => void; isReply?: boolean;
 }) {
   const [showReplies, setShowReplies] = useState(false);
   const [replies, setReplies] = useState<PostData[]>([]);
@@ -211,7 +215,7 @@ function PostCard({ post, currentUserId, currentUserName, onReply, onQuote, onUp
   }
 
   return (
-    <div className={`bg-card border border-border rounded-2xl p-4 space-y-3 ${isReply ? "ml-4 border-l-2 border-l-primary/30" : ""}`}>
+    <div onClick={() => onOpen?.(post)} className={`bg-card border border-border rounded-2xl p-4 space-y-3 ${onOpen ? "cursor-pointer hover:border-primary/50 transition-colors" : ""} ${isReply ? "ml-4 border-l-2 border-l-primary/30" : ""}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <Avatar p={post.profile} size={9} />
@@ -224,27 +228,27 @@ function PostCard({ post, currentUserId, currentUserName, onReply, onQuote, onUp
           </div>
         </div>
         {currentUserId === post.userId && (
-          <button onClick={async () => { await bg(`${SERVER}/posts/${post.id}`, { method: "DELETE" }); onDelete(post.id); }} className="text-muted-foreground hover:text-destructive p-1"><Trash2 size={13} /></button>
+          <button onClick={async (e) => { e.stopPropagation(); await bg(`${SERVER}/posts/${post.id}`, { method: "DELETE" }); onDelete(post.id); }} className="text-muted-foreground hover:text-destructive p-1"><Trash2 size={13} /></button>
         )}
       </div>
       {post.content && <p className="text-sm leading-relaxed whitespace-pre-wrap">{post.content}</p>}
       {post.videoId && <div className="aspect-video rounded-xl overflow-hidden bg-zinc-900"><iframe src={`https://www.youtube.com/embed/${post.videoId}`} title="clip" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen className="w-full h-full" /></div>}
       {post.quotedPost && <QuotedPost post={post.quotedPost} />}
       <div className="flex items-center gap-1 pt-1 border-t border-border">
-        <button onClick={handleLike} disabled={!currentUserId} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${liked ? "text-red-400 bg-red-400/10" : "text-muted-foreground hover:text-red-400 hover:bg-red-400/10"} disabled:cursor-not-allowed`}>
+        <button onClick={(e) => { e.stopPropagation(); handleLike(); }} disabled={!currentUserId} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${liked ? "text-red-400 bg-red-400/10" : "text-muted-foreground hover:text-red-400 hover:bg-red-400/10"} disabled:cursor-not-allowed`}>
           <Heart size={13} className={liked ? "fill-current" : ""} />{post.likeCount > 0 && <span>{post.likeCount}</span>}
         </button>
-        <button onClick={() => onReply(post)} disabled={!currentUserId} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors disabled:cursor-not-allowed">
+        <button onClick={(e) => { e.stopPropagation(); onReply(post); }} disabled={!currentUserId} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors disabled:cursor-not-allowed">
           <MessageCircle size={13} />{post.replyCount > 0 && <span>{post.replyCount}</span>}
         </button>
-        <button onClick={handleRepost} disabled={!currentUserId} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors ${reposted ? "text-green-400 bg-green-400/10" : "text-muted-foreground hover:text-green-400 hover:bg-green-400/10"} disabled:cursor-not-allowed`}>
+        <button onClick={(e) => { e.stopPropagation(); handleRepost(); }} disabled={!currentUserId} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors ${reposted ? "text-green-400 bg-green-400/10" : "text-muted-foreground hover:text-green-400 hover:bg-green-400/10"} disabled:cursor-not-allowed`}>
           <Repeat2 size={13} />{post.repostCount > 0 && <span>{post.repostCount}</span>}
         </button>
-        <button onClick={() => onQuote(post)} disabled={!currentUserId} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors disabled:cursor-not-allowed">
+        <button onClick={(e) => { e.stopPropagation(); onQuote(post); }} disabled={!currentUserId} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors disabled:cursor-not-allowed">
           <Quote size={13} />
         </button>
         {post.replyCount > 0 && !isReply && (
-          <button onClick={handleShowReplies} className="ml-auto text-xs text-muted-foreground hover:text-primary">
+          <button onClick={(e) => { e.stopPropagation(); handleShowReplies(); }} className="ml-auto text-xs text-muted-foreground hover:text-primary">
             {loadingReplies ? "Loading…" : showReplies ? "Hide" : `${post.replyCount} repl${post.replyCount === 1 ? "y" : "ies"}`}
           </button>
         )}
@@ -253,7 +257,7 @@ function PostCard({ post, currentUserId, currentUserName, onReply, onQuote, onUp
         <div className="space-y-3 pt-1">
           {replies.map(r => <PostCard key={r.id} post={r} currentUserId={currentUserId} onReply={onReply} onQuote={onQuote}
             onUpdate={u => setReplies(prev => prev.map(p => p.id === u.id ? u : p))}
-            onDelete={id => setReplies(prev => prev.filter(p => p.id !== id))} isReply />)}
+            onDelete={id => setReplies(prev => prev.filter(p => p.id !== id))} onOpen={onOpen} isReply />)}
         </div>
       )}
     </div>
@@ -317,11 +321,71 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
 }
 
 // ─── Feed Tab ─────────────────────────────────────────────────────────────────
+function PostDetailView({ post: initialPost, currentUserId, currentProfile, onBack, onChanged, onDeleted }: {
+  post: PostData; currentUserId?: string; currentProfile?: UserProfile | null;
+  onBack: () => void; onChanged?: (p: PostData) => void; onDeleted?: (id: string) => void;
+}) {
+  const [post, setPost] = useState(initialPost);
+  const [replies, setReplies] = useState<PostData[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [replying, setReplying] = useState(false);
+  const currentUserName = currentProfile ? `${currentProfile.firstName} ${currentProfile.lastName}`.trim() : undefined;
+
+  useEffect(() => {
+    setPost(initialPost);
+    setLoading(true);
+    Promise.all([
+      fetchPost(initialPost.id),
+      apiFetch<{ replies: PostData[] }>(`/posts/${initialPost.id}/replies`, { replies: [] }),
+    ]).then(([freshPost, replyData]) => {
+      if (freshPost) setPost(freshPost);
+      setReplies(replyData.replies ?? []);
+      setLoading(false);
+    });
+  }, [initialPost.id]);
+
+  const updatePost = (updated: PostData) => {
+    setPost(updated);
+    onChanged?.(updated);
+  };
+
+  return (
+    <div className="space-y-4">
+      <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-primary">
+        <ChevronLeft size={16} /> Back
+      </button>
+      <PostCard post={post} currentUserId={currentUserId} currentUserName={currentUserName}
+        onReply={() => setReplying(true)} onQuote={() => {}}
+        onUpdate={updatePost} onDelete={(id) => { onDeleted?.(id); onBack(); }} />
+      {currentProfile && (replying || replies.length === 0) && (
+        <ComposeBox profile={currentProfile} placeholder={`Reply to ${post.profile?.firstName || "this post"}...`} replyTo={post}
+          onPost={(reply) => { setReplies(prev => [...prev, reply]); updatePost({ ...post, replyCount: post.replyCount + 1 }); setReplying(false); }}
+          onCancel={replies.length > 0 ? () => setReplying(false) : undefined} />
+      )}
+      <div className="bg-card border border-border rounded-2xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs uppercase tracking-wider text-muted-foreground">Replies</p>
+          {currentProfile && replies.length > 0 && !replying && <button onClick={() => setReplying(true)} className="text-xs font-semibold text-primary hover:text-accent">Reply</button>}
+        </div>
+        {loading ? <p className="text-sm text-muted-foreground py-6 text-center">Loading replies...</p>
+          : replies.length === 0 ? <p className="text-sm text-muted-foreground py-6 text-center">No replies yet.</p>
+          : <div className="space-y-3">{replies.map(reply => (
+            <PostCard key={reply.id} post={reply} currentUserId={currentUserId} currentUserName={currentUserName}
+              onReply={() => setReplying(true)} onQuote={() => {}}
+              onUpdate={updated => setReplies(prev => prev.map(p => p.id === updated.id ? updated : p))}
+              onDelete={id => setReplies(prev => prev.filter(p => p.id !== id))} isReply />
+          ))}</div>}
+      </div>
+    </div>
+  );
+}
+
 function FeedTab({ currentUserId, currentProfile }: { currentUserId?: string; currentProfile?: UserProfile | null }) {
   const [posts, setPosts] = useState<PostData[]>([]);
   const [loading, setLoading] = useState(true);
   const [replyTarget, setReplyTarget] = useState<PostData | null>(null);
   const [quoteTarget, setQuoteTarget] = useState<PostData | null>(null);
+  const [selectedPost, setSelectedPost] = useState<PostData | null>(null);
   const currentUserName = currentProfile ? `${currentProfile.firstName} ${currentProfile.lastName}`.trim() : undefined;
 
   useEffect(() => {
@@ -329,6 +393,19 @@ function FeedTab({ currentUserId, currentProfile }: { currentUserId?: string; cu
   }, []);
 
   const addPost = (p: PostData) => setPosts(prev => [p, ...prev]);
+
+  if (selectedPost) {
+    return (
+      <PostDetailView
+        post={selectedPost}
+        currentUserId={currentUserId}
+        currentProfile={currentProfile}
+        onBack={() => setSelectedPost(null)}
+        onChanged={updated => setPosts(prev => prev.map(p => p.id === updated.id ? updated : p))}
+        onDeleted={id => setPosts(prev => prev.filter(p => p.id !== id))}
+      />
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -343,7 +420,8 @@ function FeedTab({ currentUserId, currentProfile }: { currentUserId?: string; cu
             onReply={p => { setQuoteTarget(null); setReplyTarget(p); }}
             onQuote={p => { setReplyTarget(null); setQuoteTarget(p); }}
             onUpdate={u => setPosts(prev => prev.map(p => p.id === u.id ? u : p))}
-            onDelete={id => setPosts(prev => prev.filter(p => p.id !== id))} />
+            onDelete={id => setPosts(prev => prev.filter(p => p.id !== id))}
+            onOpen={setSelectedPost} />
         ))}</div>}
     </div>
   );
@@ -621,7 +699,7 @@ function CommunityPage({ currentUserId, currentProfile, onBack }: { currentUserI
   const [selected, setSelected] = useState<CommunityPlayer | null>(null);
 
   const currentUserName = currentProfile ? `${currentProfile.firstName} ${currentProfile.lastName}`.trim() : undefined;
-  if (selected) return <PlayerProfileView player={selected} onBack={() => setSelected(null)} currentUserId={currentUserId} currentUserName={currentUserName} />;
+  if (selected) return <PlayerProfileView player={selected} onBack={() => setSelected(null)} currentUserId={currentUserId} currentUserName={currentUserName} currentProfile={currentProfile} />;
 
   return (
     <div className="min-h-screen bg-background" style={{ fontFamily: "'DM Sans',sans-serif" }}>
@@ -643,12 +721,17 @@ function CommunityPage({ currentUserId, currentProfile, onBack }: { currentUserI
 }
 
 // ─── Player Profile View ──────────────────────────────────────────────────────
-function PlayerProfileView({ player, onBack, currentUserId, currentUserName }: { player: CommunityPlayer; onBack?: () => void; currentUserId?: string; currentUserName?: string; }) {
+function PlayerProfileView({ player, onBack, currentUserId, currentUserName, currentProfile }: { player: CommunityPlayer; onBack?: () => void; currentUserId?: string; currentUserName?: string; currentProfile?: UserProfile | null; }) {
   const [gameData, setGameData] = useState<AppData | null>(null);
   const [copied, setCopied] = useState(false);
+  const [posts, setPosts] = useState<PostData[]>([]);
+  const [postsLoading, setPostsLoading] = useState(true);
+  const [selectedPost, setSelectedPost] = useState<PostData | null>(null);
 
   useEffect(() => {
     apiFetch<{ data: AppData | null }>(`/gamedata/${player.userId}`, { data: null }).then(d => { if (d.data) setGameData(d.data); });
+    setPostsLoading(true);
+    fetchUserPosts(player.userId).then(p => { setPosts(p); setPostsLoading(false); });
   }, [player.userId]);
 
   function copyLink() {
@@ -662,6 +745,23 @@ function PlayerProfileView({ player, onBack, currentUserId, currentUserName }: {
   const graphData = sessions.slice(-7).map(s => ({ date: shortDate(s.date), minutes: s.minutes }));
   const shotGraph = shots.map((s, i) => ({ session: `S${i + 1}`, pct: s.attempted > 0 ? Math.round((s.made / s.attempted) * 100) : 0 }));
   const p = player.profile, sum = player.summary;
+
+  if (selectedPost) {
+    return (
+      <div className="min-h-screen bg-background" style={{ fontFamily: "'DM Sans',sans-serif" }}>
+        <main className="max-w-3xl mx-auto px-6 py-8">
+          <PostDetailView
+            post={selectedPost}
+            currentUserId={currentUserId}
+            currentProfile={currentProfile}
+            onBack={() => setSelectedPost(null)}
+            onChanged={updated => setPosts(prev => prev.map(post => post.id === updated.id ? updated : post))}
+            onDeleted={id => { setPosts(prev => prev.filter(post => post.id !== id)); setSelectedPost(null); }}
+          />
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background" style={{ fontFamily: "'DM Sans',sans-serif" }}>
@@ -738,6 +838,22 @@ function PlayerProfileView({ player, onBack, currentUserId, currentUserName }: {
             </LineChart></ResponsiveContainer></div>
           </div>
         )}
+        <div className="bg-card border border-border rounded-2xl p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2"><MessageCircle size={14} className="text-primary" /><span className="text-xs uppercase tracking-wider text-muted-foreground">Posts</span></div>
+            <span className="text-xs text-muted-foreground">Newest first</span>
+          </div>
+          {postsLoading ? <p className="text-sm text-muted-foreground text-center py-8">Loading posts...</p>
+            : posts.length === 0 ? <p className="text-sm text-muted-foreground text-center py-8">No posts yet.</p>
+            : <div className="space-y-3">{posts.map(post => (
+              <PostCard key={post.id} post={post} currentUserId={currentUserId} currentUserName={currentUserName}
+                onReply={() => setSelectedPost(post)}
+                onQuote={() => setSelectedPost(post)}
+                onUpdate={updated => setPosts(prev => prev.map(p => p.id === updated.id ? updated : p))}
+                onDelete={id => setPosts(prev => prev.filter(p => p.id !== id))}
+                onOpen={setSelectedPost} />
+            ))}</div>}
+        </div>
       </main>
     </div>
   );
@@ -1087,6 +1203,7 @@ export default function App() {
   const [timerOn, setTimerOn] = useState(false), [timerSec, setTimerSec] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [shotMade, setShotMade] = useState(0), [shotAtt, setShotAtt] = useState(0), [shotMode, setShotMode] = useState(false);
+  const [shotEntryMode, setShotEntryMode] = useState<"tracker" | "quick">("tracker");
   const [streakPulse, setStreakPulse] = useState(false);
   const [showNotifs, setShowNotifs] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -1186,7 +1303,7 @@ export default function App() {
       nd.shots = [...nd.shots, { made: shotMade, attempted: shotAtt, date: today }];
     }
     updateData(nd);
-    setShotMade(0); setShotAtt(0); setShotMode(false);
+    setShotMade(0); setShotAtt(0); setShotMode(false); setShotEntryMode("tracker");
   }
 
   // Public routes
@@ -1208,6 +1325,12 @@ export default function App() {
   const totalMinutes = data.sessions.reduce((a, b) => a + b.minutes, 0);
   const rank = getRank(totalMinutes);
   const nextRank = getNextRank(totalMinutes);
+  const bottomNav = [
+    { key:"home" as View, label:"Home", Icon:Trophy, img:"1546519638-68e109498ffc" },
+    { key:"training" as View, label:"Training", Icon:Activity, img:"1606048033063-fe28cdad4f35" },
+    { key:"strength" as View, label:"Strength", Icon:Dumbbell, img:"1534438327776-3db31fd82e9a" },
+    { key:"community" as View, label:"Community", Icon:Users, img:"1546519638-68e109498ffc" },
+  ];
   const navCards = [
     { key:"strength" as View, label:"Strength", sub:"Track your lifts", img:"1534438327776-3db31fd82e9a", Icon:Dumbbell },
     { key:"training" as View, label:"Training", sub:"Long-term graphs", img:"1606048033063-fe28cdad4f35", Icon:TrendingUp },
@@ -1235,7 +1358,7 @@ export default function App() {
       </header>
       {showNotifs && userId && <NotifPanel userId={userId} onClose={() => { setShowNotifs(false); setUnreadCount(0); }} />}
 
-      <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+      <main className="max-w-5xl mx-auto px-6 py-8 pb-28 space-y-6">
         {view==="training" && <TrainingView data={data}/>}
         {view==="strength" && <StrengthView data={data} onUpdate={updateData}/>}
         {view==="community" && <CommunityPage currentUserId={userId??undefined} currentProfile={profile} onBack={()=>setView("home")}/>}
@@ -1280,7 +1403,7 @@ export default function App() {
             bgPost(userId!, np);
           }} />
 
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             {[
               {Icon:Flame, label:"Practice Streak",big:String(data.streak),unit:"days",sub:data.streak>=7?"Week+ streak! 🔥":`${7-data.streak} days to a week`,pulse:streakPulse},
               {Icon:Target,label:"Shooting %",big:String(pct),unit:"%",sub:`${totalMade} / ${totalAtt} all-time`,pulse:false},
@@ -1294,7 +1417,7 @@ export default function App() {
             ))}
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div className="bg-card border border-border rounded-2xl p-6 flex flex-col gap-5">
               <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground"><Clock size={13} className="text-primary"/> Practice Timer</div>
               <div className="flex flex-col items-center gap-4">
@@ -1315,15 +1438,29 @@ export default function App() {
                 </div>
               ):(
                 <div className="flex flex-col gap-4">
-                  <div className="grid grid-cols-2 gap-3">
-                    {[{lbl:"Made",val:shotMade,set:setShotMade},{lbl:"Attempted",val:shotAtt,set:setShotAtt}].map(({lbl,val,set})=>(
-                      <div key={lbl} className="flex flex-col gap-1.5"><label className="text-xs text-muted-foreground uppercase tracking-wide">{lbl}</label><div className="flex items-center gap-2"><button onClick={()=>set(v=>Math.max(0,v-1))} className="bg-secondary rounded-lg p-1.5 hover:bg-muted"><Minus size={14}/></button><span className="text-2xl font-black text-primary w-8 text-center" style={{fontFamily:"'Roboto Slab',serif"}}>{val}</span><button onClick={()=>set(v=>v+1)} className="bg-secondary rounded-lg p-1.5 hover:bg-muted"><Plus size={14}/></button></div></div>
+                  <div className="grid grid-cols-2 gap-1 bg-secondary rounded-xl p-1">
+                    {([{ key:"tracker", label:"Shot-by-shot", Icon:Target }, { key:"quick", label:"Quick Entry", Icon:Edit3 }] as const).map(({key,label,Icon}) => (
+                      <button key={key} onClick={() => setShotEntryMode(key)} className={`flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-colors ${shotEntryMode === key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+                        <Icon size={13} /> {label}
+                      </button>
                     ))}
                   </div>
+                  {shotEntryMode === "tracker" ? (
+                    <div className="grid grid-cols-2 gap-3">
+                      {[{lbl:"Made",val:shotMade,set:setShotMade},{lbl:"Attempted",val:shotAtt,set:setShotAtt}].map(({lbl,val,set})=>(
+                        <div key={lbl} className="flex flex-col gap-1.5"><label className="text-xs text-muted-foreground uppercase tracking-wide">{lbl}</label><div className="flex items-center gap-2"><button onClick={()=>set(v=>Math.max(0,v-1))} className="bg-secondary rounded-lg p-1.5 hover:bg-muted"><Minus size={14}/></button><span className="text-2xl font-black text-primary w-8 text-center" style={{fontFamily:"'Roboto Slab',serif"}}>{val}</span><button onClick={()=>set(v=>v+1)} className="bg-secondary rounded-lg p-1.5 hover:bg-muted"><Plus size={14}/></button></div></div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="flex flex-col gap-1.5"><label className="text-xs text-muted-foreground uppercase tracking-wide">Makes</label><input value={shotMade || ""} onChange={e=>setShotMade(Math.max(0, Number(e.target.value) || 0))} type="number" min="0" placeholder="37" className="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-2xl font-black text-primary outline-none focus:ring-1 focus:ring-primary" style={{fontFamily:"'Roboto Slab',serif"}} /></div>
+                      <div className="flex flex-col gap-1.5"><label className="text-xs text-muted-foreground uppercase tracking-wide">Attempts</label><input value={shotAtt || ""} onChange={e=>setShotAtt(Math.max(0, Number(e.target.value) || 0))} type="number" min="0" placeholder="50" className="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-2xl font-black text-primary outline-none focus:ring-1 focus:ring-primary" style={{fontFamily:"'Roboto Slab',serif"}} /></div>
+                    </div>
+                  )}
                   {shotAtt>0&&<p className="text-center text-sm text-muted-foreground">{shotMade>shotAtt?<span className="text-destructive">Made can&apos;t exceed attempted</span>:<span>= <strong className="text-primary">{Math.round((shotMade/shotAtt)*100)}%</strong> this session</span>}</p>}
                   <div className="flex gap-2">
                     <button onClick={saveShots} disabled={shotAtt===0||shotMade>shotAtt} className="flex-1 flex items-center justify-center gap-2 bg-primary text-primary-foreground font-semibold py-2.5 rounded-xl hover:bg-accent text-sm disabled:opacity-30"><Check size={15}/> Save</button>
-                    <button onClick={()=>{setShotMode(false);setShotMade(0);setShotAtt(0);}} className="flex items-center gap-2 bg-secondary text-secondary-foreground font-semibold px-4 py-2.5 rounded-xl hover:bg-muted text-sm"><X size={15}/></button>
+                    <button onClick={()=>{setShotMode(false);setShotMade(0);setShotAtt(0);setShotEntryMode("tracker");}} className="flex items-center gap-2 bg-secondary text-secondary-foreground font-semibold px-4 py-2.5 rounded-xl hover:bg-muted text-sm"><X size={15}/></button>
                   </div>
                 </div>
               )}
@@ -1354,7 +1491,7 @@ export default function App() {
             <p className="text-xs text-muted-foreground mt-3">Dashed line = all-time average ({pct}%)</p>
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {navCards.map(({key,label,sub,img,Icon})=>(
               <button key={key} onClick={()=>setView(key)} className="relative rounded-xl overflow-hidden h-28 bg-zinc-900 border-none cursor-pointer p-0 text-left group w-full">
                 <img src={`https://images.unsplash.com/photo-${img}?w=400&h=260&fit=crop&auto=format`} alt={label} className="w-full h-full object-cover opacity-40 group-hover:opacity-60 transition-opacity"/>
@@ -1368,6 +1505,19 @@ export default function App() {
           <p className="text-center text-xs text-muted-foreground pb-4">Keep going, {profile.firstName}! 🏀</p>
         </>}
       </main>
+      <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-background/95 backdrop-blur">
+        <div className="max-w-5xl mx-auto px-3 py-2 grid grid-cols-4 gap-2">
+          {bottomNav.map(({key,label,Icon,img}) => (
+            <button key={key} onClick={() => setView(key)} className={`relative overflow-hidden rounded-xl border px-2 py-2 min-h-14 transition-all ${view === key ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"}`}>
+              <img src={`https://images.unsplash.com/photo-${img}?w=240&h=120&fit=crop&auto=format`} alt="" className={`absolute inset-0 w-full h-full object-cover transition-opacity ${view === key ? "opacity-20" : "opacity-0 sm:opacity-10"}`} />
+              <span className="relative flex flex-col items-center gap-1 text-[11px] font-semibold">
+                <Icon size={17} />
+                {label}
+              </span>
+            </button>
+          ))}
+        </div>
+      </nav>
     </div>
   );
 }

@@ -227,6 +227,45 @@ app.get("/make-server-4cb0fb87/posts", async (c) => {
   return c.json({ posts: enriched });
 });
 
+app.get("/make-server-4cb0fb87/posts/user/:userId", async (c) => {
+  const userId = c.req.param("userId");
+  const allPosts = await kv.getByPrefix("post_");
+  const userPosts = allPosts
+    .filter((p: any) => p && p.userId === userId)
+    .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  const enriched = await Promise.all(userPosts.map(async (post: any) => {
+    const profile = await kv.get(`profile_${post.userId}`);
+    let quotedPost = null;
+    if (post.quotedPostId) {
+      const qp = await kv.get(`post_${post.quotedPostId}`);
+      if (qp) {
+        const qProfile = await kv.get(`profile_${qp.userId}`);
+        quotedPost = { ...qp, profile: qProfile ? miniProfile(qProfile) : null };
+      }
+    }
+    return { ...post, profile: profile ? miniProfile(profile) : { firstName: "Player", lastName: "", position: "" }, quotedPost };
+  }));
+
+  return c.json({ posts: enriched });
+});
+
+app.get("/make-server-4cb0fb87/posts/:postId", async (c) => {
+  const postId = c.req.param("postId");
+  const post = await kv.get(`post_${postId}`);
+  if (!post) return c.json({ error: "Not found" }, 404);
+  const profile = await kv.get(`profile_${post.userId}`);
+  let quotedPost = null;
+  if (post.quotedPostId) {
+    const qp = await kv.get(`post_${post.quotedPostId}`);
+    if (qp) {
+      const qProfile = await kv.get(`profile_${qp.userId}`);
+      quotedPost = { ...qp, profile: qProfile ? miniProfile(qProfile) : null };
+    }
+  }
+  return c.json({ post: { ...post, profile: profile ? miniProfile(profile) : { firstName: "Player", lastName: "", position: "" }, quotedPost } });
+});
+
 app.get("/make-server-4cb0fb87/posts/:postId/replies", async (c) => {
   const postId = c.req.param("postId");
   const allPosts = await kv.getByPrefix("post_");
