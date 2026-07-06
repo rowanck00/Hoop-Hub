@@ -91,6 +91,27 @@ function defaultStrength(): StrengthExercise[] {
 function emptyData(): AppData { return { streak: 0, lastPracticeDate: "", shots: [], sessions: [], strength: defaultStrength() }; }
 function initials(p?: MiniProfile | null) { return p ? `${p.firstName[0] ?? ""}${p.lastName[0] ?? ""}`.toUpperCase() : "?"; }
 
+// ─── Rank system ──────────────────────────────────────────────────────────────
+const RANKS = [
+  { label: "Elite",    hours: 2500, color: "#a855f7", emoji: "💎" },
+  { label: "Platinum", hours: 1000, color: "#60a5fa", emoji: "🏆" },
+  { label: "Gold",     hours: 500,  color: "#f59e0b", emoji: "🥇" },
+  { label: "Silver",   hours: 250,  color: "#94a3b8", emoji: "🥈" },
+  { label: "Bronze",   hours: 100,  color: "#c97c3a", emoji: "🥉" },
+  { label: "Rookie",   hours: 0,    color: "#8a8680", emoji: "🏀" },
+];
+function getRank(totalMinutes: number) {
+  const hours = totalMinutes / 60;
+  return RANKS.find(r => hours >= r.hours) ?? RANKS[RANKS.length - 1];
+}
+function getNextRank(totalMinutes: number) {
+  const hours = totalMinutes / 60;
+  const idx = RANKS.findIndex(r => hours >= r.hours);
+  return idx > 0 ? RANKS[idx - 1] : null;
+}
+
+const GRAD_YEARS = Array.from({ length: 10 }, (_, i) => String(new Date().getFullYear() + i - 1));
+
 // ─── Local Storage (instant, no network) ──────────────────────────────────────
 const lsGet = (k: string) => { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : null; } catch { return null; } };
 const lsSet = (k: string, v: any) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
@@ -356,7 +377,10 @@ function PlayersTab({ onSelect }: { onSelect: (p: CommunityPlayer) => void }) {
                 <div key={s.l}><p className="text-lg font-black text-primary leading-none" style={{ fontFamily: "'Roboto Slab',serif" }}>{s.v}</p><p className="text-xs text-muted-foreground mt-0.5">{s.l}</p></div>
               ))}
             </div>
-            <div className="px-5 pb-4 flex items-center justify-between"><span className="text-xs text-muted-foreground">{player.summary.activeDays} sessions</span><ArrowRight size={14} className="text-muted-foreground group-hover:text-primary" /></div>
+            <div className="px-5 pb-4 flex items-center justify-between">
+              <span className="text-xs font-medium" style={{ color: getRank(player.summary.totalMinutes).color }}>{getRank(player.summary.totalMinutes).emoji} {getRank(player.summary.totalMinutes).label}</span>
+              <ArrowRight size={14} className="text-muted-foreground group-hover:text-primary" />
+            </div>
           </div>
         ))}</div>}
     </div>
@@ -874,6 +898,82 @@ function StrengthView({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData
   );
 }
 
+// ─── Editable Measurables ────────────────────────────────────────────────────
+function EditableMeasurables({ profile, onSave }: { profile: UserProfile; onSave: (u: Partial<UserProfile>) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({ height: profile.height, weight: profile.weight, wingspan: profile.wingspan, vertical: profile.vertical, position: profile.position, gradYear: profile.gradYear });
+  const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
+  const cls = "bg-muted border border-border rounded-xl px-3 py-2 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary w-full";
+
+  function save() { onSave(form); setEditing(false); }
+
+  if (!editing) {
+    const metrics = [
+      { l: "Height", v: profile.height },
+      { l: "Weight", v: profile.weight ? `${profile.weight} lbs` : "" },
+      { l: "Wingspan", v: profile.wingspan },
+      { l: "Vertical", v: profile.vertical ? `${profile.vertical}"` : "" },
+    ].filter(m => m.v);
+
+    return (
+      <div className="bg-card border border-border rounded-2xl px-6 py-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground uppercase tracking-wider">Measurables</span>
+            <span className="text-xs text-primary bg-primary/10 px-2 py-0.5 rounded-md">{profile.position}</span>
+            {profile.gradYear && <span className="text-xs text-muted-foreground bg-secondary px-2 py-0.5 rounded-md">Class of {profile.gradYear}</span>}
+          </div>
+          <button onClick={() => setEditing(true)} className="text-xs text-muted-foreground hover:text-primary transition-colors px-2 py-1 rounded-lg hover:bg-primary/10">Edit ✏️</button>
+        </div>
+        {metrics.length > 0 ? (
+          <div className="grid grid-cols-4 gap-4 text-center">
+            {metrics.map(m => <div key={m.l}><p className="text-xl font-black leading-none" style={{ fontFamily: "'Roboto Slab',serif" }}>{m.v}</p><p className="text-xs text-muted-foreground mt-1">{m.l}</p></div>)}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground text-center py-1">Tap Edit to add your measurables</p>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-card border border-border rounded-2xl p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-semibold">Edit Profile</span>
+        <div className="flex gap-2">
+          <button onClick={() => setEditing(false)} className="text-xs text-muted-foreground hover:text-foreground px-3 py-1.5 rounded-lg bg-secondary">Cancel</button>
+          <button onClick={save} className="text-xs font-semibold text-primary-foreground bg-primary px-3 py-1.5 rounded-lg hover:bg-accent">Save</button>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">Position</label>
+          <select value={form.position} onChange={e => set("position", e.target.value)} className={cls}>
+            {POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">Grad Year</label>
+          <select value={form.gradYear} onChange={e => set("gradYear", e.target.value)} className={cls}>
+            {GRAD_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </div>
+        {[
+          { k: "height", l: "Height", ph: '6\'2"' },
+          { k: "weight", l: "Weight (lbs)", ph: "185" },
+          { k: "wingspan", l: "Wingspan", ph: '6\'5"' },
+          { k: "vertical", l: "Vertical (in)", ph: "34" },
+        ].map(({ k, l, ph }) => (
+          <div key={k}>
+            <label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">{l}</label>
+            <input value={(form as any)[k]} onChange={e => set(k, e.target.value)} placeholder={ph} className={cls} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [authState, setAuthState] = useState<AuthState>("loading");
@@ -999,9 +1099,12 @@ export default function App() {
   const graphData = data.sessions.slice(-7).map(s=>({date:shortDate(s.date),minutes:s.minutes}));
   const todayMin = (()=>{ const t=new Date().toISOString().slice(0,10); return data.sessions.find(s=>s.date===t)?.minutes||0; })();
   const viewLabels: Record<View,string> = { home:"Home",training:"Training",strength:"Strength",community:"Community" };
+  const totalMinutes = data.sessions.reduce((a, b) => a + b.minutes, 0);
+  const rank = getRank(totalMinutes);
+  const nextRank = getNextRank(totalMinutes);
   const navCards = [
     { key:"strength" as View, label:"Strength", sub:"Track your lifts", img:"1534438327776-3db31fd82e9a", Icon:Dumbbell },
-    { key:"training" as View, label:"Training", sub:"Long-term graphs", img:"1504450758481-c3d163b34b90", Icon:TrendingUp },
+    { key:"training" as View, label:"Training", sub:"Long-term graphs", img:"1606048033063-fe28cdad4f35", Icon:TrendingUp },
     { key:"community" as View, label:"Community", sub:"Feed & players", img:"1546519638-68e109498ffc", Icon:Users },
   ];
 
@@ -1029,7 +1132,7 @@ export default function App() {
           <div className="relative rounded-2xl overflow-hidden h-48 bg-zinc-900">
             <img src="https://images.unsplash.com/photo-1546519638-68e109498ffc?w=1200&h=400&fit=crop&auto=format" alt="Court" className="w-full h-full object-cover opacity-60"/>
             <div className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/30 to-transparent flex items-end p-6">
-              <div><p className="text-xs uppercase tracking-widest text-primary font-medium mb-1">{APP_NAME}</p><h2 className="text-3xl font-black text-white leading-none" style={{fontFamily:"'Roboto Slab',serif"}}>Keep grinding, {profile.firstName}.</h2></div>
+              <div><p className="text-xs uppercase tracking-widest text-primary font-medium mb-1">{APP_NAME}</p><h2 className="text-3xl font-black text-white leading-none" style={{fontFamily:"'Roboto Slab',serif"}}>Keep going, {profile.firstName}.</h2></div>
             </div>
             <div className="absolute top-3 right-3 flex items-center gap-2">
               <span className="bg-black/50 rounded-lg px-2 py-1 text-xs text-primary font-medium">{profile.position}</span>
@@ -1037,13 +1140,33 @@ export default function App() {
             </div>
           </div>
 
-          {(profile.height||profile.weight||profile.wingspan||profile.vertical)&&(
-            <div className="bg-card border border-border rounded-2xl px-6 py-4 grid grid-cols-4 gap-4 text-center">
-              {[{l:"Height",v:profile.height},{l:"Weight",v:profile.weight?`${profile.weight} lbs`:""},{l:"Wingspan",v:profile.wingspan},{l:"Vertical",v:profile.vertical?`${profile.vertical}"`:""}].filter(m=>m.v).map(m=>(
-                <div key={m.l}><p className="text-xl font-black leading-none" style={{fontFamily:"'Roboto Slab',serif"}}>{m.v}</p><p className="text-xs text-muted-foreground mt-1">{m.l}</p></div>
-              ))}
+          {/* Rank card */}
+          <div className="bg-card border border-border rounded-2xl px-6 py-4 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="text-3xl">{rank.emoji}</span>
+              <div>
+                <p className="font-black text-lg leading-none" style={{ color: rank.color, fontFamily: "'Roboto Slab',serif" }}>{rank.label}</p>
+                <p className="text-xs text-muted-foreground">{Math.round(totalMinutes / 60)} hrs total</p>
+              </div>
             </div>
-          )}
+            {nextRank ? (
+              <div className="text-right">
+                <p className="text-xs text-muted-foreground">Next: {nextRank.emoji} {nextRank.label}</p>
+                <p className="text-xs text-muted-foreground">{Math.max(0, Math.round(nextRank.hours - totalMinutes / 60))} hrs to go</p>
+                <div className="h-1.5 w-28 bg-muted rounded-full overflow-hidden mt-1.5">
+                  <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(100, ((totalMinutes / 60 - rank.hours) / (nextRank.hours - rank.hours)) * 100)}%`, background: rank.color }} />
+                </div>
+              </div>
+            ) : <p className="text-xs text-primary font-semibold">Max Rank! 💎</p>}
+          </div>
+
+          {/* Measurables with edit */}
+          <EditableMeasurables profile={profile} onSave={updated => {
+            const np = { ...profile, ...updated };
+            setProfile(np);
+            saveLocalProfile(np);
+            bgPost(userId!, np);
+          }} />
 
           <div className="grid grid-cols-3 gap-4">
             {[
@@ -1130,7 +1253,7 @@ export default function App() {
               </button>
             ))}
           </div>
-          <p className="text-center text-xs text-muted-foreground pb-4">Keep grinding, {profile.firstName}! 🏀</p>
+          <p className="text-center text-xs text-muted-foreground pb-4">Keep going, {profile.firstName}! 🏀</p>
         </>}
       </main>
     </div>
