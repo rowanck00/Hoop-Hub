@@ -972,16 +972,25 @@ function LoginScreen() {
 // ─── Profile Setup ────────────────────────────────────────────────────────────
 function ProfileSetup({ userId, email, onComplete }: { userId: string; email: string; onComplete: (p: UserProfile) => void }) {
   const [form, setForm] = useState({ firstName: "", lastName: "", position: "PG", gradYear: String(new Date().getFullYear() + 1), height: "", weight: "", wingspan: "", vertical: "", bio: "", strengths: "", weaknesses: "", isPublic: true });
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
   const cls = "bg-secondary border border-border rounded-xl px-4 py-2.5 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary w-full";
   const lbl = "text-xs text-muted-foreground uppercase tracking-wider mb-1 block";
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.firstName.trim() || !form.lastName.trim()) return;
+    if (!form.firstName.trim() || !form.lastName.trim() || saving) return;
+    setSaving(true);
+    setSaveError("");
     const profile: UserProfile = { userId, email, ...form };
     saveLocalProfile(profile);
-    bgPost(userId, profile);
+    const saved = await apiPost("/profile", { userId, ...profile });
+    if (!saved?.ok) {
+      setSaveError("We couldn't save your profile yet. Check your connection and try again so your measurables stay with your account.");
+      setSaving(false);
+      return;
+    }
     onComplete(profile);
   }
 
@@ -1017,7 +1026,8 @@ function ProfileSetup({ userId, email, onComplete }: { userId: string; email: st
             </div>
             <div><p className="text-sm font-medium">Visible on Community Board</p><p className="text-xs text-muted-foreground">Coaches and scouts can see your profile</p></div>
           </label>
-          <button type="submit" disabled={!form.firstName.trim() || !form.lastName.trim()} className="bg-primary text-primary-foreground font-semibold py-3 rounded-xl hover:bg-accent disabled:opacity-40">
+          {saveError && <p className="text-xs rounded-xl p-3 leading-relaxed text-amber-400 bg-amber-400/10">{saveError}</p>}
+          <button type="submit" disabled={saving || !form.firstName.trim() || !form.lastName.trim()} className="bg-primary text-primary-foreground font-semibold py-3 rounded-xl hover:bg-accent disabled:opacity-40">
             Let&apos;s Go 🏀
           </button>
         </form>
@@ -1055,7 +1065,7 @@ function TrainingView({ data }: { data: AppData }) {
   const heatBg = ["#1e1e20","rgba(249,115,22,0.2)","rgba(249,115,22,0.4)","rgba(249,115,22,0.7)","#f97316"];
   return (
     <div className="space-y-6">
-      <ViewHero img="1606048033063-fe28cdad4f35" title="Training" sub="Long-term progress" />
+      <ViewHero img="1519861531473-9200262188bf" title="Training" sub="Long-term progress" />
       <div className="bg-card border border-border rounded-2xl p-6">
         <div className="flex items-center gap-2 mb-5"><Clock size={14} className="text-primary" /><span className="text-xs uppercase tracking-wider text-muted-foreground">Weekly Volume (last 8 weeks)</span></div>
         <div className="h-52"><ResponsiveContainer width="100%" height="100%"><BarChart id="t-weekly" data={weeklyData} barSize={28} margin={{ top:4,right:4,bottom:0,left:-20 }}>
@@ -1098,7 +1108,7 @@ function StrengthView({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData
   const last = ex.history.length?ex.history[ex.history.length-1].weight:null;
   return (
     <div className="space-y-6">
-      <ViewHero img="1534438327776-3db31fd82e9a" title="Strength" sub="Track your lifts" />
+      <ViewHero img="1581009146145-b5ef050c2e1e" title="Strength" sub="Track your lifts" />
       <div className="flex flex-wrap gap-2">
         {data.strength.map((e,i)=><button key={i} onClick={()=>{setSel(i);setAdding(false);}} className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${i===sel?"bg-primary text-primary-foreground":"bg-secondary text-secondary-foreground hover:bg-muted"}`}>{e.name}</button>)}
         {addEx?(<div className="flex items-center gap-2"><input autoFocus value={exName} onChange={e=>setExName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveEx()} placeholder="Exercise name" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none w-36" /><button onClick={saveEx} className="bg-primary text-primary-foreground rounded-xl p-2"><Check size={14}/></button><button onClick={()=>{setAddEx(false);setExName("");}} className="bg-secondary rounded-xl p-2"><X size={14}/></button></div>)
@@ -1227,6 +1237,7 @@ export default function App() {
       const lp = localProfile(uid);
       if (lp) {
         setProfile(lp); setData(localData(uid) || emptyData()); setAuthState("ready");
+        bgPost(uid, lp);
         // Check unread notifications
         fetchNotifs(uid).then(n => setUnreadCount(n.filter((x: any) => !x.read).length)).catch(() => {});
         return;
@@ -1327,13 +1338,13 @@ export default function App() {
   const nextRank = getNextRank(totalMinutes);
   const bottomNav = [
     { key:"home" as View, label:"Home", Icon:Trophy, img:"1546519638-68e109498ffc" },
-    { key:"training" as View, label:"Training", Icon:Activity, img:"1606048033063-fe28cdad4f35" },
-    { key:"strength" as View, label:"Strength", Icon:Dumbbell, img:"1534438327776-3db31fd82e9a" },
+    { key:"training" as View, label:"Training", Icon:Activity, img:"1519861531473-9200262188bf" },
+    { key:"strength" as View, label:"Strength", Icon:Dumbbell, img:"1581009146145-b5ef050c2e1e" },
     { key:"community" as View, label:"Community", Icon:Users, img:"1546519638-68e109498ffc" },
   ];
   const navCards = [
-    { key:"strength" as View, label:"Strength", sub:"Track your lifts", img:"1534438327776-3db31fd82e9a", Icon:Dumbbell },
-    { key:"training" as View, label:"Training", sub:"Long-term graphs", img:"1606048033063-fe28cdad4f35", Icon:TrendingUp },
+    { key:"strength" as View, label:"Strength", sub:"Track your lifts", img:"1581009146145-b5ef050c2e1e", Icon:Dumbbell },
+    { key:"training" as View, label:"Training", sub:"Long-term graphs", img:"1519861531473-9200262188bf", Icon:TrendingUp },
     { key:"community" as View, label:"Community", sub:"Feed & players", img:"1546519638-68e109498ffc", Icon:Users },
   ];
 
@@ -1494,7 +1505,7 @@ export default function App() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {navCards.map(({key,label,sub,img,Icon})=>(
               <button key={key} onClick={()=>setView(key)} className="relative rounded-xl overflow-hidden h-28 bg-zinc-900 border-none cursor-pointer p-0 text-left group w-full">
-                <img src={`https://images.unsplash.com/photo-${img}?w=400&h=260&fit=crop&auto=format`} alt={label} className="w-full h-full object-cover opacity-40 group-hover:opacity-60 transition-opacity"/>
+                <img src={`https://images.unsplash.com/photo-${img}?w=400&h=260&fit=crop&auto=format`} alt={label} className="w-full h-full object-cover opacity-60 group-hover:opacity-75 transition-opacity"/>
                 <div className="absolute inset-0 p-3 flex flex-col justify-between">
                   <div className="flex items-center gap-1.5 text-primary"><Icon size={13}/><span className="text-xs font-semibold uppercase tracking-wide">{label}</span></div>
                   <div className="flex items-center justify-between"><span className="text-xs text-white/50">{sub}</span><ArrowRight size={13} className="text-white/40 group-hover:text-primary"/></div>
