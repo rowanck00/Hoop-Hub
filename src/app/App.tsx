@@ -132,11 +132,11 @@ const bgData = (userId: string, d: AppData) =>
   bg(`${SERVER}/gamedata`, { method: "POST", body: JSON.stringify({ userId, data: d }) });
 
 async function apiFetch<T>(path: string, fallback: T): Promise<T> {
-  try { const r = await fetch(`${SERVER}${path}`, { signal: AbortSignal.timeout(6000) }); return await r.json(); }
+  try { const r = await fetch(`${SERVER}${path}`, { signal: AbortSignal.timeout(12000) }); return await r.json(); }
   catch { return fallback as any; }
 }
 async function apiPost(path: string, body: any) {
-  try { const r = await fetch(`${SERVER}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(6000) }); return await r.json(); }
+  try { const r = await fetch(`${SERVER}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(12000) }); return await r.json(); }
   catch { return null; }
 }
 
@@ -1235,28 +1235,33 @@ export default function App() {
       setUserId(uid); setUserEmail(email);
       // 1. Try localStorage first (instant)
       const lp = localProfile(uid);
+      const ld = localData(uid);
       if (lp) {
-        setProfile(lp); setData(localData(uid) || emptyData()); setAuthState("ready");
-        bgPost(uid, lp);
-        // Check unread notifications
+        setProfile(lp); setData(ld || emptyData()); setAuthState("ready");
         fetchNotifs(uid).then(n => setUnreadCount(n.filter((x: any) => !x.read).length)).catch(() => {});
-        return;
       }
       // 2. Fetch from server (new device or cleared cache)
       try {
-        const res = await fetch(`${SERVER}/profile/${uid}`, { signal: AbortSignal.timeout(6000) });
-        const json = await res.json();
-        if (json.profile) {
-          saveLocalProfile(json.profile);
-          const gdRes = await fetch(`${SERVER}/gamedata/${uid}`, { signal: AbortSignal.timeout(6000) });
-          const gdJson = await gdRes.json();
-          if (gdJson.data) saveLocalData(uid, gdJson.data);
-          setProfile(json.profile);
-          setData(gdJson.data || emptyData());
+        const [profileRes, gameRes] = await Promise.all([
+          apiFetch<{ profile: UserProfile | null }>(`/profile/${uid}`, { profile: null }),
+          apiFetch<{ data: AppData | null }>(`/gamedata/${uid}`, { data: null }),
+        ]);
+        if (profileRes.profile) {
+          const serverData = gameRes.data || ld || emptyData();
+          saveLocalProfile(profileRes.profile);
+          saveLocalData(uid, serverData);
+          setProfile(profileRes.profile);
+          setData(serverData);
           setAuthState("ready");
+          fetchNotifs(uid).then(n => setUnreadCount(n.filter((x: any) => !x.read).length)).catch(() => {});
           return;
         }
-      } catch {}
+        if (lp) {
+          await apiPost("/profile", { userId: uid, ...lp });
+          if (ld) await apiPost("/gamedata", { userId: uid, data: ld });
+          return;
+        }
+      } catch { if (lp) return; }
       // 3. No profile found anywhere — new user needs to set up
       setAuthState("needs_profile");
     }
@@ -1282,7 +1287,7 @@ export default function App() {
 
   const updateData = useCallback((nd: AppData) => {
     setData(nd);
-    if (userId) { saveLocalData(userId, nd); bgData(userId, nd); }
+    if (userId) { saveLocalData(userId, nd); apiPost("/gamedata", { userId, data: nd }); }
   }, [userId]);
 
   function handleProfileComplete(p: UserProfile) { setProfile(p); setData(emptyData()); setAuthState("ready"); }
@@ -1411,7 +1416,7 @@ export default function App() {
             const np = { ...profile, ...updated };
             setProfile(np);
             saveLocalProfile(np);
-            bgPost(userId!, np);
+            apiPost("/profile", { userId: userId!, ...np });
           }} />
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
