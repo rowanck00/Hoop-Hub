@@ -485,6 +485,7 @@ function LoginScreen() {
       else { setError(""); setIsSignUp(false); setPassword(""); setError("Account created! Now sign in with your email and password."); }
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      console.log("Sign in error:", error);
       if (error) {
         if (error.message.includes("Invalid")) setError("Wrong email or password. Try again or create an account.");
         else setError(error.message);
