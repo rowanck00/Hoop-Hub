@@ -62,7 +62,7 @@ interface AppData {
 // ─── Config ───────────────────────────────────────────────────────────────────
 const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
 const TEAM_LEVELS = ["Men's League", "High School", "College", "Pro / Overseas", "Club / Recreational"];
-const SERVER = `https://${projectId}.supabase.co/functions/v1/make-server-4cb0fb87`;
+const SERVER = `https://${projectId}.supabase.co/functions/v1/server/make-server-4cb0fb87`;
 const APP_NAME = "HOOP HUB";
 const APP_TAGLINE = "Track your game. Own your grind.";
 
