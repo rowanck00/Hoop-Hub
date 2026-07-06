@@ -987,10 +987,10 @@ function ProfileSetup({ userId, email, onComplete }: { userId: string; email: st
     saveLocalProfile(profile);
     const saved = await apiPost("/profile", { userId, ...profile });
     if (!saved?.ok) {
-      setSaveError("We couldn't save your profile yet. Check your connection and try again so your measurables stay with your account.");
-      setSaving(false);
-      return;
+      setSaveError("Saved on this device. We'll keep trying to sync it to your account.");
+      bgPost(userId, profile);
     }
+    setSaving(false);
     onComplete(profile);
   }
 
