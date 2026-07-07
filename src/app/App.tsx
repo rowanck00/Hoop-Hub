@@ -122,11 +122,26 @@ const emailKey = (email: string) => email.trim().toLowerCase();
 const localProfile = (uid: string) => lsGet(`hh_profile_${uid}`);
 const localProfileByEmail = (email: string) => email ? lsGet(`hh_profile_email_${emailKey(email)}`) : null;
 const localData    = (uid: string) => lsGet(`hh_data_${uid}`);
+const localDataByEmail = (email: string) => email ? lsGet(`hh_data_email_${emailKey(email)}`) : null;
 const saveLocalProfile = (p: UserProfile) => {
   lsSet(`hh_profile_${p.userId}`, p);
   if (p.email) lsSet(`hh_profile_email_${emailKey(p.email)}`, p);
 };
-const saveLocalData    = (uid: string, d: AppData) => lsSet(`hh_data_${uid}`, d);
+const saveLocalData = (uid: string, d: AppData, email = "") => {
+  lsSet(`hh_data_${uid}`, d);
+  if (email) lsSet(`hh_data_email_${emailKey(email)}`, d);
+};
+const localPosts = (): PostData[] => lsGet("hh_local_posts") || [];
+const saveLocalPosts = (posts: PostData[]) => lsSet("hh_local_posts", posts);
+const saveLocalPost = (post: PostData) => {
+  const posts = localPosts().filter(p => p.id !== post.id);
+  saveLocalPosts([post, ...posts].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 100));
+};
+const mergePosts = (serverPosts: PostData[], savedPosts: PostData[]) => {
+  const byId = new Map<string, PostData>();
+  [...savedPosts, ...serverPosts].forEach(p => byId.set(p.id, p));
+  return Array.from(byId.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+};
 
 // ─── Background API (never blocks the UI) ────────────────────────────────────
 const bg = (url: string, opts?: RequestInit) =>
@@ -157,7 +172,10 @@ const fetchSocial   = async (userId: string) => apiFetch<{following:string[];fol
 const fetchNotifs   = async (userId: string) => { const d = await apiFetch<{notifications: any[]}>(`/notifications/${userId}`, {notifications:[]}); return d.notifications ?? []; };
 const markNotifsRead = (userId: string) => apiPost(`/notifications/${userId}/read`, {});
 const deleteTeam = (id: string) => bg(`${SERVER}/teams/${id}`, { method: "DELETE" });
-const fetchUserPosts = async (userId: string) => { const d = await apiFetch<{posts: PostData[]}>(`/posts/user/${userId}`, {posts:[]}); return d.posts ?? []; };
+const fetchUserPosts = async (userId: string) => {
+  const d = await apiFetch<{posts: PostData[]}>(`/posts/user/${userId}`, {posts:[]});
+  return mergePosts(d.posts ?? [], localPosts().filter(p => p.userId === userId));
+};
 const fetchPost = async (postId: string) => { const d = await apiFetch<{post: PostData | null}>(`/posts/${postId}`, {post:null}); return d.post; };
 
 // ─── Chart Tip ────────────────────────────────────────────────────────────────
@@ -286,10 +304,31 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
     const res = await apiPost("/posts", { userId: profile.userId, content: content.trim(), videoUrl: videoId ? videoUrl : null, replyTo: replyTo?.id ?? null, quotedPostId: quotedPost?.id ?? null });
     if (res?.post) {
       res.post.profile = { firstName: profile.firstName, lastName: profile.lastName, position: profile.position };
+      saveLocalPost(res.post);
       onPost(res.post);
       setContent(""); setVideoUrl(""); setShowVideo(false);
     } else {
-      setError("Post did not save. Check your connection and try again.");
+      const fallbackPost: PostData = {
+        id: `local_${Date.now()}`,
+        userId: profile.userId,
+        content: content.trim(),
+        videoUrl: videoId ? videoUrl : undefined,
+        videoId: videoId || undefined,
+        replyTo: replyTo?.id,
+        quotedPostId: quotedPost?.id,
+        quotedPost,
+        createdAt: new Date().toISOString(),
+        likes: [],
+        reposts: [],
+        likeCount: 0,
+        repostCount: 0,
+        replyCount: 0,
+        profile: { firstName: profile.firstName, lastName: profile.lastName, position: profile.position },
+      };
+      saveLocalPost(fallbackPost);
+      onPost(fallbackPost);
+      setContent(""); setVideoUrl(""); setShowVideo(false);
+      setError("Saved on this device, but it did not sync to everyone yet.");
     }
     setPosting(false);
   }
@@ -400,7 +439,8 @@ function FeedTab({ currentUserId, currentProfile }: { currentUserId?: string; cu
   const currentUserName = currentProfile ? `${currentProfile.firstName} ${currentProfile.lastName}`.trim() : undefined;
 
   useEffect(() => {
-    apiFetch<{ posts: PostData[] }>("/posts", { posts: [] }).then(d => { setPosts(d.posts ?? []); setLoading(false); });
+    setPosts(localPosts().filter(p => !p.replyTo));
+    apiFetch<{ posts: PostData[] }>("/posts", { posts: [] }).then(d => { setPosts(mergePosts(d.posts ?? [], localPosts()).filter(p => !p.replyTo)); setLoading(false); });
   }, []);
 
   const addPost = (p: PostData) => setPosts(prev => [p, ...prev]);
@@ -1257,7 +1297,7 @@ export default function App() {
       // 1. Try localStorage first (instant)
       const storedProfile = localProfile(uid) || localProfileByEmail(email);
       const lp = storedProfile ? { ...storedProfile, userId: uid, email: storedProfile.email || email } : null;
-      const ld = localData(uid);
+      const ld = localData(uid) || localDataByEmail(email);
       if (lp) {
         saveLocalProfile(lp);
         setProfile(lp); setData(ld || emptyData()); setAuthState("ready");
@@ -1272,7 +1312,7 @@ export default function App() {
         if (profileRes.profile) {
           const serverData = gameRes.data || ld || emptyData();
           saveLocalProfile(profileRes.profile);
-          saveLocalData(uid, serverData);
+          saveLocalData(uid, serverData, profileRes.profile.email || email);
           setProfile(profileRes.profile);
           setData(serverData);
           setAuthState("ready");
@@ -1281,7 +1321,10 @@ export default function App() {
         }
         if (lp) {
           await apiPost("/profile", { userId: uid, ...lp });
-          if (ld) await apiPost("/gamedata", { userId: uid, data: ld });
+          if (ld) {
+            saveLocalData(uid, ld, email);
+            await apiPost("/gamedata", { userId: uid, data: ld });
+          }
           return;
         }
       } catch { if (lp) return; }
@@ -1310,10 +1353,15 @@ export default function App() {
 
   const updateData = useCallback((nd: AppData) => {
     setData(nd);
-    if (userId) { saveLocalData(userId, nd); apiPost("/gamedata", { userId, data: nd }); }
-  }, [userId]);
+    if (userId) { saveLocalData(userId, nd, userEmail); apiPost("/gamedata", { userId, data: nd }); }
+  }, [userId, userEmail]);
 
-  function handleProfileComplete(p: UserProfile) { setProfile(p); setData(emptyData()); setAuthState("ready"); }
+  function handleProfileComplete(p: UserProfile) {
+    setProfile(p);
+    saveLocalProfile(p);
+    saveLocalData(p.userId, data, p.email || userEmail);
+    setAuthState("ready");
+  }
   async function handleLogout() { await supabase.auth.signOut(); setUserId(null); setProfile(null); setData(emptyData()); setAuthState("unauthenticated"); }
   function copyShareLink() {
     if (!userId) return;
