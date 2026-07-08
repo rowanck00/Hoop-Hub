@@ -25,6 +25,7 @@ type AuthState = "loading" | "unauthenticated" | "needs_profile" | "ready";
 
 interface UserProfile {
   userId: string; firstName: string; lastName: string; email: string;
+  username?: string; displayName?: string; avatarUrl?: string; createdAt?: string;
   position: string; gradYear: string; height: string; weight: string;
   wingspan: string; vertical: string; bio: string; isPublic: boolean;
   strengths: string; weaknesses: string;
@@ -35,7 +36,7 @@ interface Team {
   memberProfiles: { userId: string; firstName: string; lastName: string; position: string; }[];
   createdAt: string;
 }
-interface MiniProfile { firstName: string; lastName: string; position: string; }
+interface MiniProfile { firstName: string; lastName: string; position: string; username?: string; displayName?: string; avatarUrl?: string; }
 interface TaggedUser extends MiniProfile { userId: string; }
 interface PostData {
   id: string; userId: string; content: string;
@@ -119,6 +120,7 @@ const GRAD_YEARS = Array.from({ length: 10 }, (_, i) => String(new Date().getFul
 const lsGet = (k: string) => { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : null; } catch { return null; } };
 const lsSet = (k: string, v: any) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 const emailKey = (email: string) => email.trim().toLowerCase();
+const slugify = (s: string) => s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "").slice(0, 24);
 const localProfile = (uid: string) => lsGet(`hh_profile_${uid}`);
 const localProfileByEmail = (email: string) => email ? lsGet(`hh_profile_email_${emailKey(email)}`) : null;
 const localData    = (uid: string) => lsGet(`hh_data_${uid}`);
@@ -142,6 +144,210 @@ const mergePosts = (serverPosts: PostData[], savedPosts: PostData[]) => {
   [...savedPosts, ...serverPosts].forEach(p => byId.set(p.id, p));
   return Array.from(byId.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 };
+function profileDisplay(p?: MiniProfile | UserProfile | null) {
+  if (!p) return "Player";
+  return (p.displayName || `${p.firstName || ""} ${p.lastName || ""}`.trim() || p.username || "Player").trim();
+}
+function miniProfile(p: any): MiniProfile {
+  return {
+    firstName: p?.firstName || p?.first_name || "",
+    lastName: p?.lastName || p?.last_name || "",
+    position: p?.position || "",
+    username: p?.username || "",
+    displayName: p?.displayName || p?.display_name || "",
+    avatarUrl: p?.avatarUrl || p?.avatar_url || "",
+  };
+}
+function dbProfileToApp(row: any): UserProfile {
+  return {
+    userId: row.user_id,
+    email: row.email || "",
+    username: row.username || "",
+    displayName: row.display_name || "",
+    avatarUrl: row.avatar_url || "",
+    createdAt: row.created_at || "",
+    firstName: row.first_name || "",
+    lastName: row.last_name || "",
+    position: row.position || "",
+    gradYear: row.grad_year || "",
+    height: row.height || "",
+    weight: row.weight || "",
+    wingspan: row.wingspan || "",
+    vertical: row.vertical || "",
+    bio: row.bio || "",
+    isPublic: row.is_public !== false,
+    strengths: row.strengths || "",
+    weaknesses: row.weaknesses || "",
+  };
+}
+function appProfileToDb(p: UserProfile) {
+  const displayName = (p.displayName || `${p.firstName} ${p.lastName}`.trim()).trim();
+  const username = slugify(p.username || displayName || p.email.split("@")[0] || p.userId.slice(0, 8)) || p.userId.slice(0, 8);
+  return {
+    user_id: p.userId,
+    email: p.email,
+    username,
+    display_name: displayName,
+    avatar_url: p.avatarUrl || "",
+    first_name: p.firstName || "",
+    last_name: p.lastName || "",
+    position: p.position || "",
+    grad_year: p.gradYear || "",
+    height: p.height || "",
+    weight: p.weight || "",
+    wingspan: p.wingspan || "",
+    vertical: p.vertical || "",
+    bio: p.bio || "",
+    is_public: p.isPublic !== false,
+    strengths: p.strengths || "",
+    weaknesses: p.weaknesses || "",
+    updated_at: new Date().toISOString(),
+  };
+}
+function dbPostToApp(row: any, profiles: Map<string, MiniProfile>, likes: Map<string, string[]>, replyCounts: Map<string, number>, quotedPost?: PostData | null): PostData {
+  const likedBy = likes.get(row.id) || [];
+  return {
+    id: row.id,
+    userId: row.user_id,
+    content: row.content || "",
+    videoUrl: row.video_url || undefined,
+    videoId: row.video_id || undefined,
+    replyTo: row.reply_to || undefined,
+    quotedPostId: row.quoted_post_id || undefined,
+    quotedPost: quotedPost || undefined,
+    createdAt: row.created_at,
+    likes: likedBy,
+    reposts: [],
+    likeCount: likedBy.length,
+    repostCount: 0,
+    replyCount: replyCounts.get(row.id) || 0,
+    profile: profiles.get(row.user_id) || { firstName: "Player", lastName: "", position: "" },
+  };
+}
+async function getDbProfile(userId: string) {
+  const { data, error } = await supabase.from("hh_profiles").select("*").eq("user_id", userId).maybeSingle();
+  if (error || !data) return null;
+  return dbProfileToApp(data);
+}
+async function saveDbProfile(profile: UserProfile) {
+  const { data, error } = await supabase.from("hh_profiles").upsert(appProfileToDb(profile), { onConflict: "user_id" }).select("*").single();
+  if (error) return null;
+  return dbProfileToApp(data);
+}
+async function getDbGameData(userId: string) {
+  const { data, error } = await supabase.from("hh_gamedata").select("data").eq("user_id", userId).maybeSingle();
+  if (error || !data?.data) return null;
+  return data.data as AppData;
+}
+async function saveDbGameData(userId: string, data: AppData) {
+  const { error } = await supabase.from("hh_gamedata").upsert({ user_id: userId, data, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+  return !error;
+}
+async function enrichDbPosts(rows: any[]): Promise<PostData[]> {
+  if (!rows.length) return [];
+  const postIds = rows.map(r => r.id);
+  const userIds = Array.from(new Set(rows.map(r => r.user_id).filter(Boolean)));
+  const quotedIds = Array.from(new Set(rows.map(r => r.quoted_post_id).filter(Boolean)));
+  const [profileRes, likeRes, replyRes, quotedRes] = await Promise.all([
+    userIds.length ? supabase.from("hh_profiles").select("*").in("user_id", userIds) : Promise.resolve({ data: [] as any[] }),
+    supabase.from("hh_post_likes").select("post_id,user_id").in("post_id", postIds),
+    supabase.from("hh_posts").select("reply_to").in("reply_to", postIds),
+    quotedIds.length ? supabase.from("hh_posts").select("*").in("id", quotedIds) : Promise.resolve({ data: [] as any[] }),
+  ]);
+  const profiles = new Map<string, MiniProfile>();
+  (profileRes.data || []).forEach((p: any) => profiles.set(p.user_id, miniProfile(p)));
+  const likes = new Map<string, string[]>();
+  (likeRes.data || []).forEach((l: any) => likes.set(l.post_id, [...(likes.get(l.post_id) || []), l.user_id]));
+  const replyCounts = new Map<string, number>();
+  (replyRes.data || []).forEach((r: any) => replyCounts.set(r.reply_to, (replyCounts.get(r.reply_to) || 0) + 1));
+  const quotedRows = new Map<string, any>();
+  (quotedRes.data || []).forEach((q: any) => quotedRows.set(q.id, q));
+  return rows.map(row => {
+    const quoted = row.quoted_post_id && quotedRows.has(row.quoted_post_id)
+      ? dbPostToApp(quotedRows.get(row.quoted_post_id), profiles, likes, replyCounts)
+      : null;
+    return dbPostToApp(row, profiles, likes, replyCounts, quoted);
+  });
+}
+function rankedPosts(posts: PostData[], sort: "top" | "newest" = "top") {
+  if (sort === "newest") return [...posts].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  return [...posts].sort((a, b) => {
+    const score = (p: PostData) => {
+      const ageHours = Math.max(0, (Date.now() - new Date(p.createdAt).getTime()) / 3600000);
+      const recencyBonus = Math.max(0, 48 - ageHours);
+      return p.likeCount * 3 + p.replyCount * 2 + recencyBonus;
+    };
+    return score(b) - score(a);
+  });
+}
+async function fetchDbPosts(sort: "top" | "newest" = "top") {
+  const { data, error } = await supabase.from("hh_posts").select("*").is("reply_to", null).order("created_at", { ascending: false }).limit(100);
+  if (error) return [];
+  return rankedPosts(await enrichDbPosts(data || []), sort);
+}
+async function fetchDbUserPosts(userId: string) {
+  const { data, error } = await supabase.from("hh_posts").select("*").eq("user_id", userId).order("created_at", { ascending: false }).limit(100);
+  if (error) return [];
+  return await enrichDbPosts(data || []);
+}
+async function fetchDbPost(postId: string) {
+  const { data, error } = await supabase.from("hh_posts").select("*").eq("id", postId).maybeSingle();
+  if (error || !data) return null;
+  const posts = await enrichDbPosts([data]);
+  return posts[0] || null;
+}
+async function fetchDbReplies(postId: string) {
+  const { data, error } = await supabase.from("hh_posts").select("*").eq("reply_to", postId).order("created_at", { ascending: true }).limit(100);
+  if (error) return [];
+  return await enrichDbPosts(data || []);
+}
+async function createDbPost(body: any) {
+  const { data, error } = await supabase.from("hh_posts").insert({
+    user_id: body.userId,
+    content: body.content || "",
+    video_url: body.videoUrl || null,
+    video_id: body.videoUrl ? extractYTId(body.videoUrl) : null,
+    reply_to: body.replyTo || null,
+    quoted_post_id: body.quotedPostId || null,
+  }).select("*").single();
+  if (error || !data) return null;
+  const posts = await enrichDbPosts([data]);
+  return posts[0] || null;
+}
+async function toggleDbLike(postId: string, userId: string) {
+  const { data: existing } = await supabase.from("hh_post_likes").select("post_id").eq("post_id", postId).eq("user_id", userId).maybeSingle();
+  if (existing) await supabase.from("hh_post_likes").delete().eq("post_id", postId).eq("user_id", userId);
+  else await supabase.from("hh_post_likes").insert({ post_id: postId, user_id: userId });
+  const { count } = await supabase.from("hh_post_likes").select("*", { count: "exact", head: true }).eq("post_id", postId);
+  return { liked: !existing, likeCount: count || 0 };
+}
+async function deleteDbPost(postId: string) {
+  const { error } = await supabase.from("hh_posts").delete().eq("id", postId);
+  return !error;
+}
+async function fetchDbCommunity() {
+  const [{ data: profiles }, { data: gameRows }] = await Promise.all([
+    supabase.from("hh_profiles").select("*").eq("is_public", true).order("created_at", { ascending: false }),
+    supabase.from("hh_gamedata").select("*"),
+  ]);
+  const gameMap = new Map<string, AppData>();
+  (gameRows || []).forEach((g: any) => gameMap.set(g.user_id, g.data as AppData));
+  return (profiles || []).map((row: any) => {
+    const gamedata = gameMap.get(row.user_id) || emptyData();
+    const shots = gamedata.shots || [], sessions = gamedata.sessions || [];
+    const made = shots.reduce((a, b) => a + b.made, 0), att = shots.reduce((a, b) => a + b.attempted, 0);
+    return {
+      userId: row.user_id,
+      profile: dbProfileToApp(row),
+      summary: {
+        streak: gamedata.streak || 0,
+        shootingPct: att > 0 ? Math.round((made / att) * 100) : 0,
+        totalMinutes: sessions.reduce((a, b) => a + b.minutes, 0),
+        activeDays: sessions.filter(s => s.minutes > 0).length,
+      },
+    };
+  });
+}
 
 // ─── Background API (never blocks the UI) ────────────────────────────────────
 const bg = (url: string, opts?: RequestInit) =>
@@ -153,10 +359,35 @@ const bgData = (userId: string, d: AppData) =>
   bg(`${SERVER}/gamedata`, { method: "POST", body: JSON.stringify({ userId, data: d }) });
 
 async function apiFetch<T>(path: string, fallback: T): Promise<T> {
+  try {
+    if (path.startsWith("/profile/")) return { profile: await getDbProfile(path.split("/").pop() || "") } as T;
+    if (path.startsWith("/gamedata/")) return { data: await getDbGameData(path.split("/").pop() || "") } as T;
+    if (path === "/community") return { players: await fetchDbCommunity() } as T;
+    if (path.startsWith("/posts/user/")) return { posts: await fetchDbUserPosts(path.split("/").pop() || "") } as T;
+    if (path.endsWith("/replies") && path.startsWith("/posts/")) return { replies: await fetchDbReplies(path.split("/")[2]) } as T;
+    if (path.startsWith("/posts/")) return { post: await fetchDbPost(path.split("/")[2]) } as T;
+    if (path.startsWith("/posts")) {
+      const sort = path.includes("sort=newest") ? "newest" : "top";
+      return { posts: await fetchDbPosts(sort) } as T;
+    }
+  } catch { return fallback as any; }
   try { const r = await fetch(`${SERVER}${path}`, { signal: AbortSignal.timeout(12000), headers: { "Authorization": `Bearer ${supabaseAnonKey}`, "apikey": supabaseAnonKey } }); return r.ok ? await r.json() : fallback as any; }
   catch { return fallback as any; }
 }
 async function apiPost(path: string, body: any) {
+  try {
+    if (path === "/profile") {
+      const profile = await saveDbProfile(body as UserProfile);
+      return profile ? { ok: true, profile } : null;
+    }
+    if (path === "/gamedata") return (await saveDbGameData(body.userId, body.data)) ? { ok: true } : null;
+    if (path === "/posts") {
+      const post = await createDbPost(body);
+      return post ? { post } : null;
+    }
+    if (path.endsWith("/like") && path.startsWith("/posts/")) return await toggleDbLike(path.split("/")[2], body.userId);
+    if (path.endsWith("/repost") && path.startsWith("/posts/")) return { reposted: false, repostCount: 0 };
+  } catch { return null; }
   try { const r = await fetch(`${SERVER}${path}`, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${supabaseAnonKey}`, "apikey": supabaseAnonKey }, body: JSON.stringify(body), signal: AbortSignal.timeout(12000) }); return r.ok ? await r.json() : null; }
   catch { return null; }
 }
@@ -174,7 +405,7 @@ const markNotifsRead = (userId: string) => apiPost(`/notifications/${userId}/rea
 const deleteTeam = (id: string) => bg(`${SERVER}/teams/${id}`, { method: "DELETE" });
 const fetchUserPosts = async (userId: string) => {
   const d = await apiFetch<{posts: PostData[]}>(`/posts/user/${userId}`, {posts:[]});
-  return mergePosts(d.posts ?? [], localPosts().filter(p => p.userId === userId));
+  return d.posts ?? [];
 };
 const fetchPost = async (postId: string) => { const d = await apiFetch<{post: PostData | null}>(`/posts/${postId}`, {post:null}); return d.post; };
 
@@ -191,8 +422,8 @@ const ChartTip = ({ active, payload, label, unit = "" }: any) => {
 
 // ─── Avatar ───────────────────────────────────────────────────────────────────
 const Avatar = ({ p, size = 9 }: { p?: MiniProfile | null; size?: number }) => (
-  <div className={`w-${size} h-${size} rounded-xl bg-primary/20 flex items-center justify-center text-sm font-black text-primary flex-shrink-0`} style={{ fontFamily: "'Roboto Slab',serif" }}>
-    {initials(p)}
+  <div className={`w-${size} h-${size} rounded-xl bg-primary/20 flex items-center justify-center text-sm font-black text-primary flex-shrink-0 overflow-hidden`} style={{ fontFamily: "'Roboto Slab',serif" }}>
+    {p?.avatarUrl ? <img src={p.avatarUrl} alt={profileDisplay(p)} className="w-full h-full object-cover" /> : initials(p)}
   </div>
 );
 
@@ -201,7 +432,7 @@ const QuotedPost = ({ post }: { post: PostData }) => (
   <div className="border border-border rounded-xl p-3 mt-2 space-y-1.5">
     <div className="flex items-center gap-2">
       <div className="w-5 h-5 rounded-lg bg-primary/20 flex items-center justify-center text-xs font-black text-primary">{initials(post.profile)}</div>
-      <span className="text-sm font-semibold">{post.profile?.firstName} {post.profile?.lastName}</span>
+      <span className="text-sm font-semibold">{profileDisplay(post.profile)}</span>
       {post.profile?.position && <span className="text-xs text-primary bg-primary/10 px-1.5 py-0.5 rounded-md">{post.profile.position}</span>}
     </div>
     {post.content && <p className="text-sm text-muted-foreground line-clamp-3">{post.content}</p>}
@@ -245,14 +476,14 @@ function PostCard({ post, currentUserId, currentUserName, onReply, onQuote, onUp
           <Avatar p={post.profile} size={9} />
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-semibold text-sm">{post.profile?.firstName} {post.profile?.lastName}</span>
+              <span className="font-semibold text-sm">{profileDisplay(post.profile)}</span>
               {post.profile?.position && <span className="text-xs text-primary bg-primary/10 px-1.5 py-0.5 rounded-md">{post.profile.position}</span>}
             </div>
             <span className="text-xs text-muted-foreground">{timeAgo(post.createdAt)}</span>
           </div>
         </div>
         {currentUserId === post.userId && (
-          <button onClick={async (e) => { e.stopPropagation(); await bg(`${SERVER}/posts/${post.id}`, { method: "DELETE" }); onDelete(post.id); }} className="text-muted-foreground hover:text-destructive p-1"><Trash2 size={13} /></button>
+          <button onClick={async (e) => { e.stopPropagation(); if (await deleteDbPost(post.id)) onDelete(post.id); }} className="text-muted-foreground hover:text-destructive p-1"><Trash2 size={13} /></button>
         )}
       </div>
       {post.content && <p className="text-sm leading-relaxed whitespace-pre-wrap">{post.content}</p>}
@@ -303,32 +534,10 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
     setPosting(true); setError("");
     const res = await apiPost("/posts", { userId: profile.userId, content: content.trim(), videoUrl: videoId ? videoUrl : null, replyTo: replyTo?.id ?? null, quotedPostId: quotedPost?.id ?? null });
     if (res?.post) {
-      res.post.profile = { firstName: profile.firstName, lastName: profile.lastName, position: profile.position };
-      saveLocalPost(res.post);
       onPost(res.post);
       setContent(""); setVideoUrl(""); setShowVideo(false);
     } else {
-      const fallbackPost: PostData = {
-        id: `local_${Date.now()}`,
-        userId: profile.userId,
-        content: content.trim(),
-        videoUrl: videoId ? videoUrl : undefined,
-        videoId: videoId || undefined,
-        replyTo: replyTo?.id,
-        quotedPostId: quotedPost?.id,
-        quotedPost,
-        createdAt: new Date().toISOString(),
-        likes: [],
-        reposts: [],
-        likeCount: 0,
-        repostCount: 0,
-        replyCount: 0,
-        profile: { firstName: profile.firstName, lastName: profile.lastName, position: profile.position },
-      };
-      saveLocalPost(fallbackPost);
-      onPost(fallbackPost);
-      setContent(""); setVideoUrl(""); setShowVideo(false);
-      setError("Saved on this device, but it did not sync to everyone yet.");
+      setError("Post did not save. Make sure the Supabase SQL setup has been run.");
     }
     setPosting(false);
   }
@@ -436,12 +645,13 @@ function FeedTab({ currentUserId, currentProfile }: { currentUserId?: string; cu
   const [replyTarget, setReplyTarget] = useState<PostData | null>(null);
   const [quoteTarget, setQuoteTarget] = useState<PostData | null>(null);
   const [selectedPost, setSelectedPost] = useState<PostData | null>(null);
+  const [sort, setSort] = useState<"top" | "newest">("top");
   const currentUserName = currentProfile ? `${currentProfile.firstName} ${currentProfile.lastName}`.trim() : undefined;
 
   useEffect(() => {
-    setPosts(localPosts().filter(p => !p.replyTo));
-    apiFetch<{ posts: PostData[] }>("/posts", { posts: [] }).then(d => { setPosts(mergePosts(d.posts ?? [], localPosts()).filter(p => !p.replyTo)); setLoading(false); });
-  }, []);
+    setLoading(true);
+    apiFetch<{ posts: PostData[] }>(`/posts?sort=${sort}`, { posts: [] }).then(d => { setPosts(d.posts ?? []); setLoading(false); });
+  }, [sort]);
 
   const addPost = (p: PostData) => setPosts(prev => [p, ...prev]);
 
@@ -460,6 +670,12 @@ function FeedTab({ currentUserId, currentProfile }: { currentUserId?: string; cu
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs uppercase tracking-wider text-muted-foreground">{sort === "top" ? "Ranked by likes, replies, and recency" : "Newest posts first"}</p>
+        <div className="flex gap-1 bg-card border border-border rounded-xl p-1">
+          {(["top", "newest"] as const).map(s => <button key={s} onClick={() => setSort(s)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize ${sort === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>{s}</button>)}
+        </div>
+      </div>
       {currentProfile && !replyTarget && !quoteTarget && <ComposeBox profile={currentProfile} onPost={addPost} />}
       {replyTarget && currentProfile && <ComposeBox profile={currentProfile} placeholder={`Reply to ${replyTarget.profile?.firstName}…`} replyTo={replyTarget} onPost={p => { addPost(p); setReplyTarget(null); }} onCancel={() => setReplyTarget(null)} />}
       {quoteTarget && currentProfile && <ComposeBox profile={currentProfile} placeholder="Add your thoughts…" quotedPost={quoteTarget} onPost={p => { addPost(p); setQuoteTarget(null); }} onCancel={() => setQuoteTarget(null)} />}
@@ -1032,7 +1248,7 @@ function LoginScreen() {
 
 // ─── Profile Setup ────────────────────────────────────────────────────────────
 function ProfileSetup({ userId, email, onComplete }: { userId: string; email: string; onComplete: (p: UserProfile) => void }) {
-  const [form, setForm] = useState({ firstName: "", lastName: "", position: "PG", gradYear: String(new Date().getFullYear() + 1), height: "", weight: "", wingspan: "", vertical: "", bio: "", strengths: "", weaknesses: "", isPublic: true });
+  const [form, setForm] = useState({ username: "", displayName: "", avatarUrl: "", firstName: "", lastName: "", position: "PG", gradYear: String(new Date().getFullYear() + 1), height: "", weight: "", wingspan: "", vertical: "", bio: "", strengths: "", weaknesses: "", isPublic: true });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
@@ -1044,15 +1260,16 @@ function ProfileSetup({ userId, email, onComplete }: { userId: string; email: st
     if (!form.firstName.trim() || !form.lastName.trim() || saving) return;
     setSaving(true);
     setSaveError("");
-    const profile: UserProfile = { userId, email, ...form };
+    const profile: UserProfile = { userId, email, ...form, username: slugify(form.username || form.displayName || `${form.firstName}${form.lastName}`), displayName: form.displayName || `${form.firstName} ${form.lastName}`.trim() };
     saveLocalProfile(profile);
     const saved = await apiPost("/profile", { userId, ...profile });
     if (!saved?.ok) {
-      setSaveError("Saved on this device. We'll keep trying to sync it to your account.");
-      bgPost(userId, profile);
+      setSaveError("Could not save to Supabase. Run the community_schema.sql setup in Supabase, then try again.");
+      setSaving(false);
+      return;
     }
     setSaving(false);
-    onComplete(profile);
+    onComplete(saved.profile || profile);
   }
 
   return (
@@ -1061,9 +1278,14 @@ function ProfileSetup({ userId, email, onComplete }: { userId: string; email: st
         <div className="text-center mb-8"><span className="text-4xl">🏀</span><h1 className="text-2xl font-black mt-3" style={{ fontFamily: "'Roboto Slab',serif" }}>Set Up Your Profile</h1><p className="text-muted-foreground text-sm mt-1">Coaches and scouts can discover you on the community board.</p></div>
         <form onSubmit={submit} className="bg-card border border-border rounded-2xl p-6 flex flex-col gap-5">
           <div className="grid grid-cols-2 gap-3">
+            <div><label className={lbl}>Username *</label><input value={form.username} onChange={e => set("username", e.target.value)} placeholder="rowanhoops" className={cls} /></div>
+            <div><label className={lbl}>Display Name</label><input value={form.displayName} onChange={e => set("displayName", e.target.value)} placeholder="Rowan Kemp" className={cls} /></div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
             <div><label className={lbl}>First Name *</label><input autoFocus value={form.firstName} onChange={e => set("firstName", e.target.value)} placeholder="First name" className={cls} required /></div>
             <div><label className={lbl}>Last Name *</label><input value={form.lastName} onChange={e => set("lastName", e.target.value)} placeholder="Last name" className={cls} required /></div>
           </div>
+          <div><label className={lbl}>Profile Image URL (optional)</label><input value={form.avatarUrl} onChange={e => set("avatarUrl", e.target.value)} placeholder="https://..." className={cls} /></div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className={lbl}>Position</label><select value={form.position} onChange={e => set("position", e.target.value)} className={cls}>{POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}</select></div>
             <div><label className={lbl}>Grad Year</label><input value={form.gradYear} onChange={e => set("gradYear", e.target.value)} placeholder="2026" className={cls} /></div>
