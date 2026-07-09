@@ -3,7 +3,7 @@ import {
   Flame, Target, Clock, TrendingUp, Plus, Minus, RotateCcw,
   Play, Pause, Check, X, ChevronLeft, Dumbbell, ArrowRight,
   LogOut, Users, Globe, Copy, ExternalLink, Search,
-  Heart, MessageCircle, Repeat2, Quote, Trash2, Edit3, Activity,
+  Heart, MessageCircle, Repeat2, Quote, Trash2, Video, Edit3, Activity,
 } from "lucide-react";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis,
@@ -191,6 +191,18 @@ async function apiPost(path: string, body: any) {
   catch { return null; }
 }
 
+async function uploadCommunityVideo(userId: string, file: File) {
+  const ext = (file.name.split(".").pop() || "mp4").toLowerCase().replace(/[^a-z0-9]/g, "") || "mp4";
+  const path = `${userId}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+  const { error } = await supabase.storage.from("community-videos").upload(path, file, {
+    cacheControl: "3600",
+    contentType: file.type || "video/mp4",
+    upsert: false,
+  });
+  if (error) throw error;
+  return supabase.storage.from("community-videos").getPublicUrl(path).data.publicUrl;
+}
+
 const fetchTeams    = async (): Promise<Team[]> => { const d = await apiFetch<{teams: Team[]}>("/teams", {teams:[]}); return d.teams ?? []; };
 const createTeam    = (body: any) => apiPost("/teams", body);
 const joinTeam      = (id: string, userId: string) => apiPost(`/teams/${id}/join`, { userId });
@@ -324,17 +336,42 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
   onPost: (p: PostData) => void; onCancel?: () => void;
 }) {
   const [content, setContent] = useState(""), [posting, setPosting] = useState(false);
-  const canPost = content.trim().length > 0;
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const [videoPreview, setVideoPreview] = useState("");
+  const [videoError, setVideoError] = useState("");
+  const canPost = content.trim().length > 0 || !!videoFile;
+
+  function chooseVideo(file?: File) {
+    setVideoError("");
+    if (videoPreview) URL.revokeObjectURL(videoPreview);
+    if (!file) { setVideoFile(null); setVideoPreview(""); return; }
+    if (!file.type.startsWith("video/")) { setVideoError("Choose a video file."); return; }
+    if (file.size > 100 * 1024 * 1024) { setVideoError("Video is too large. Keep it under 100 MB for now."); return; }
+    setVideoFile(file);
+    setVideoPreview(URL.createObjectURL(file));
+  }
+
+  useEffect(() => () => { if (videoPreview) URL.revokeObjectURL(videoPreview); }, [videoPreview]);
 
   async function submit() {
     if (!canPost || posting) return;
     setPosting(true);
-    const res = await apiPost("/posts", { userId: profile.userId, content: content.trim(), videoUrl: null, replyTo: replyTo?.id ?? null, quotedPostId: quotedPost?.id ?? null });
-    if (res?.post) {
-      res.post.profile = { firstName: profile.firstName, lastName: profile.lastName, position: profile.position, avatarUrl: profile.avatarUrl, role: profile.role };
-      onPost(res.post);
+    setVideoError("");
+    try {
+      const uploadedVideoUrl = videoFile ? await uploadCommunityVideo(profile.userId, videoFile) : null;
+      const res = await apiPost("/posts", { userId: profile.userId, content: content.trim(), videoUrl: uploadedVideoUrl, replyTo: replyTo?.id ?? null, quotedPostId: quotedPost?.id ?? null });
+      if (res?.post) {
+        res.post.profile = { firstName: profile.firstName, lastName: profile.lastName, position: profile.position, avatarUrl: profile.avatarUrl, role: profile.role };
+        onPost(res.post);
+      }
+      setContent("");
+      setVideoFile(null);
+      if (videoPreview) URL.revokeObjectURL(videoPreview);
+      setVideoPreview("");
+    } catch {
+      setVideoError("Video could not upload. Make sure the community-videos storage bucket is set up.");
     }
-    setContent(""); setPosting(false);
+    setPosting(false);
   }
 
   return (
@@ -349,9 +386,19 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
         <textarea autoFocus value={content} onChange={e => setContent(e.target.value)} placeholder={placeholder} rows={3}
           className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground resize-none outline-none" />
       </div>
+      {videoPreview && (
+        <div className="space-y-2">
+          <div className="aspect-video rounded-xl overflow-hidden bg-black"><video src={videoPreview} controls className="w-full h-full object-contain" /></div>
+          <button onClick={() => chooseVideo()} className="text-xs text-muted-foreground hover:text-destructive">Remove video</button>
+        </div>
+      )}
+      {videoError && <p className="text-xs text-amber-400 bg-amber-400/10 rounded-xl p-3">{videoError}</p>}
       {quotedPost && <QuotedPost post={quotedPost} />}
       <div className="flex items-center justify-between pt-1 border-t border-border">
-        <p className="text-xs text-muted-foreground">Share an update with the community.</p>
+        <label className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 cursor-pointer">
+          <Video size={13} /> Video
+          <input type="file" accept="video/*" className="hidden" onChange={e => chooseVideo(e.target.files?.[0])} />
+        </label>
         <div className="flex gap-2">
           {onCancel && <button onClick={onCancel} className="text-xs text-muted-foreground hover:text-foreground px-3 py-1.5 rounded-lg">Cancel</button>}
           <button onClick={submit} disabled={!canPost || posting} className="bg-primary text-primary-foreground text-xs font-semibold px-4 py-1.5 rounded-lg hover:bg-accent disabled:opacity-30">
@@ -1188,7 +1235,7 @@ function TrainingPlanBuilder({ data, onUpdate }: { data: AppData; onUpdate: (d: 
 
   return (
     <div className="bg-card border border-border rounded-2xl p-6 space-y-5">
-      <div className="flex items-center gap-2"><Edit3 size={14} className="text-primary" /><span className="text-xs uppercase tracking-wider text-muted-foreground">Custom Training Plan</span></div>
+      <div className="flex items-center gap-2"><Edit3 size={14} className="text-primary" /><span className="text-xs uppercase tracking-wider text-muted-foreground">Strength Training Plan</span></div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div><label className={label}>Age</label><input value={plan.age} onChange={e => set("age", e.target.value)} type="number" className={input} /></div>
         <div><label className={label}>Experience</label><select value={plan.experience} onChange={e => set("experience", e.target.value)} className={input}>{["Beginner","Intermediate","Advanced"].map(x => <option key={x}>{x}</option>)}</select></div>
@@ -1218,7 +1265,7 @@ function TrainingPlanBuilder({ data, onUpdate }: { data: AppData; onUpdate: (d: 
   );
 }
 
-function TrainingView({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData) => void }) {
+function TrainingView({ data }: { data: AppData }) {
   const weeklyData = Array.from({ length: 8 }, (_, wi) => {
     const wS = 7 * (7 - wi), wE = wS - 7;
     const total = data.sessions.filter(s => { const ago = Math.floor((Date.now() - new Date(s.date + "T12:00:00").getTime()) / 86400000); return ago < wS && ago >= wE; }).reduce((a, b) => a + b.minutes, 0);
@@ -1236,7 +1283,6 @@ function TrainingView({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData
   return (
     <div className="space-y-6">
       <ViewHero img="1519861531473-9200262188bf" title="Training" sub="Long-term progress" />
-      <TrainingPlanBuilder data={data} onUpdate={onUpdate} />
       <FlightTimeTool />
       <div className="bg-card border border-border rounded-2xl p-6">
         <div className="flex items-center gap-2 mb-5"><Clock size={14} className="text-primary" /><span className="text-xs uppercase tracking-wider text-muted-foreground">Weekly Volume (last 8 weeks)</span></div>
@@ -1281,6 +1327,7 @@ function StrengthView({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData
   return (
     <div className="space-y-6">
       <ViewHero img="1581009146145-b5ef050c2e1e" title="Strength" sub="Track your lifts" />
+      <TrainingPlanBuilder data={data} onUpdate={onUpdate} />
       <div className="flex flex-wrap gap-2">
         {data.strength.map((e,i)=><button key={i} onClick={()=>{setSel(i);setAdding(false);}} className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${i===sel?"bg-primary text-primary-foreground":"bg-secondary text-secondary-foreground hover:bg-muted"}`}>{e.name}</button>)}
         {addEx?(<div className="flex items-center gap-2"><input autoFocus value={exName} onChange={e=>setExName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveEx()} placeholder="Exercise name" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none w-36" /><button onClick={saveEx} className="bg-primary text-primary-foreground rounded-xl p-2"><Check size={14}/></button><button onClick={()=>{setAddEx(false);setExName("");}} className="bg-secondary rounded-xl p-2"><X size={14}/></button></div>)
@@ -1652,7 +1699,7 @@ export default function App() {
       {showNotifs && userId && <NotifPanel userId={userId} onClose={() => { setShowNotifs(false); setUnreadCount(0); }} />}
 
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
-        {view==="training" && <TrainingView data={data} onUpdate={updateData}/>}
+        {view==="training" && <TrainingView data={data}/>}
         {view==="strength" && <StrengthView data={data} onUpdate={updateData}/>}
         {view==="community" && <CommunityPage currentUserId={userId??undefined} currentProfile={profile} onBack={()=>setView("home")}/>}
 
