@@ -307,6 +307,7 @@ function PostCard({ post, currentUserId, currentUserName, canModerate = false, o
   const [showReplies, setShowReplies] = useState(false);
   const [replies, setReplies] = useState<PostData[]>([]);
   const [loadingReplies, setLoadingReplies] = useState(false);
+  const [reported, setReported] = useState(false);
   const liked = !!currentUserId && post.likes.includes(currentUserId);
   const reposted = !!currentUserId && post.reposts.includes(currentUserId);
 
@@ -328,8 +329,8 @@ function PostCard({ post, currentUserId, currentUserName, canModerate = false, o
   }
   async function handleReport() {
     if (!currentUserId) return;
-    await apiPost(`/posts/${post.id}/report`, { userId: currentUserId, reason: "Reported in app" });
-    onDelete(post.id);
+    const res = await apiPost(`/posts/${post.id}/report`, { userId: currentUserId, reason: "Reported in app" });
+    if (res?.ok) setReported(true);
   }
   async function handleBlock() {
     if (!currentUserId || currentUserId === post.userId) return;
@@ -371,7 +372,7 @@ function PostCard({ post, currentUserId, currentUserName, canModerate = false, o
         <button onClick={() => onQuote(post)} disabled={!currentUserId} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors disabled:cursor-not-allowed">
           <Quote size={13} />
         </button>
-        <button onClick={handleReport} disabled={!currentUserId} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-amber-400 hover:bg-amber-400/10 disabled:cursor-not-allowed">Report</button>
+        <button onClick={handleReport} disabled={!currentUserId || reported} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-amber-400 hover:bg-amber-400/10 disabled:cursor-not-allowed">{reported ? "Reported" : "Report"}</button>
         {currentUserId && currentUserId !== post.userId && <button onClick={handleBlock} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10">Block</button>}
         {post.replyCount > 0 && !isReply && (
           <button onClick={handleShowReplies} className="ml-auto text-xs text-muted-foreground hover:text-primary">
@@ -1168,24 +1169,24 @@ function FlightTimeTool() {
   }
 
   return (
-    <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
+    <div id="flight-time-tool" className="bg-card border border-border rounded-2xl p-6 space-y-4">
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 mb-1"><Activity size={14} className="text-primary" /><span className="text-xs uppercase tracking-wider text-muted-foreground">Vertical Jump Flight Time</span></div>
           <p className="text-xs text-muted-foreground">Use flight time for vertical, or switch to RSI mode and mark ground contact start/end.</p>
         </div>
-        <label className="bg-primary text-primary-foreground rounded-xl px-3 py-2 text-xs font-semibold cursor-pointer whitespace-nowrap">
-          Choose Video
-          <input type="file" accept="video/*" className="hidden" onChange={e => loadVideo(e.target.files?.[0])} />
-        </label>
+        <div className="flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={() => setMeasureMode("vertical")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${measureMode==="vertical"?"bg-primary text-primary-foreground":"bg-secondary text-secondary-foreground"}`}>Vertical</button>
+          <button type="button" onClick={() => setMeasureMode("rsi")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${measureMode==="rsi"?"bg-primary text-primary-foreground":"bg-secondary text-secondary-foreground"}`}>RSI</button>
+          <label className="bg-primary text-primary-foreground rounded-xl px-3 py-2 text-xs font-semibold cursor-pointer whitespace-nowrap">
+            Choose Video
+            <input type="file" accept="video/*" className="hidden" onChange={e => loadVideo(e.target.files?.[0])} />
+          </label>
+        </div>
       </div>
 
       {videoUrl ? (
         <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-2">
-            <button type="button" onClick={() => setMeasureMode("vertical")} className={`rounded-xl py-2 text-sm font-semibold ${measureMode==="vertical"?"bg-primary text-primary-foreground":"bg-secondary text-secondary-foreground"}`}>Vertical</button>
-            <button type="button" onClick={() => setMeasureMode("rsi")} className={`rounded-xl py-2 text-sm font-semibold ${measureMode==="rsi"?"bg-primary text-primary-foreground":"bg-secondary text-secondary-foreground"}`}>RSI</button>
-          </div>
           <video
             ref={videoRef}
             src={videoUrl}
@@ -1358,9 +1359,7 @@ function TrainingPlanBuilder({ data, onUpdate }: { data: AppData; onUpdate: (d: 
 function JumpTestingSection({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData) => void }) {
   const [type, setType] = useState<JumpTestEntry["type"]>("Squat Jump");
   const [height, setHeight] = useState("");
-  const [contact, setContact] = useState("");
   const [boxHeight, setBoxHeight] = useState("18");
-  const [notes, setNotes] = useState("");
   const tests = data.jumpTests || [];
   const rsiHistory = tests.filter(t => t.rsi).map(t => ({ date: shortDate(t.date), rsi: t.rsi }));
   const latest = (t: JumpTestEntry["type"]) => [...tests].reverse().find(x => x.type === t)?.height || 0;
@@ -1368,12 +1367,11 @@ function JumpTestingSection({ data, onUpdate }: { data: AppData; onUpdate: (d: A
   const lowElasticPass = nonCmj && cmj && (cmj - nonCmj >= Math.max(2, nonCmj * 0.1));
   const highElasticPass = cmj && drop && (drop - cmj >= Math.max(2, cmj * 0.1));
   function save() {
-    const h = parseFloat(height), c = parseFloat(contact);
+    const h = parseFloat(height);
     if (!h) return;
-    const extra = type === "Drop Jump" ? `Box: ${boxHeight} in${notes.trim() ? ` | ${notes.trim()}` : ""}` : notes.trim();
-    const entry: JumpTestEntry = { id: crypto.randomUUID(), date: new Date().toISOString().slice(0,10), type, height: h, contactTime: c || undefined, rsi: c ? Math.round((h / 39.37 / c) * 100) / 100 : undefined, notes: extra };
+    const entry: JumpTestEntry = { id: crypto.randomUUID(), date: new Date().toISOString().slice(0,10), type, height: h, notes: type === "Drop Jump" ? `Box: ${boxHeight} in` : "" };
     onUpdate({ ...data, jumpTests: [...tests, entry] });
-    setHeight(""); setContact(""); setNotes("");
+    setHeight("");
   }
   return (
     <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
@@ -1383,17 +1381,20 @@ function JumpTestingSection({ data, onUpdate }: { data: AppData; onUpdate: (d: A
           <option value="Squat Jump">Non-Countermovement Jump</option><option value="Countermovement Jump">Countermovement Jump</option><option value="Drop Jump">Drop Jump</option>
         </select>
         <input value={height} onChange={e => setHeight(e.target.value)} type="number" placeholder="Jump height (in)" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none" />
-        {type === "Drop Jump" ? <select value={boxHeight} onChange={e => setBoxHeight(e.target.value)} className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none"><option value="18">18 inch box</option><option value="24">24 inch box</option></select> : <input value={contact} onChange={e => setContact(e.target.value)} type="number" step="0.01" placeholder="Contact time (sec)" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none" />}
+        {type === "Drop Jump" ? <select value={boxHeight} onChange={e => setBoxHeight(e.target.value)} className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none"><option value="18">18 inch box</option><option value="24">24 inch box</option></select> : <button type="button" onClick={() => document.getElementById("flight-time-tool")?.scrollIntoView({ behavior: "smooth", block: "start" })} className="bg-secondary text-secondary-foreground rounded-xl px-3 py-2 text-sm font-semibold">Test Jump Height</button>}
         <button onClick={save} className="bg-primary text-primary-foreground rounded-xl px-3 py-2 text-sm font-semibold">Save Test</button>
       </div>
-      <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Notes" className="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none" />
+      {type === "Drop Jump" && <button type="button" onClick={() => document.getElementById("flight-time-tool")?.scrollIntoView({ behavior: "smooth", block: "start" })} className="w-full bg-secondary text-secondary-foreground rounded-xl px-3 py-2 text-sm font-semibold">Test Jump Height With Flight Time</button>}
       <div className="grid md:grid-cols-2 gap-3">
         <div className="bg-background border border-border rounded-xl p-4"><p className="text-primary font-black mb-1">Low-End Elastic Check</p><p className="text-sm text-muted-foreground">{nonCmj && cmj ? (lowElasticPass ? "Passed. CMJ is sufficiently higher than non-countermovement jump." : "Inelastic deficit detected: CMJ is not at least 2 inches or 10% higher. This points to low-end stretch shortening cycle and basic eccentric limitations.") : "Enter non-countermovement jump and CMJ."}</p>{nonCmj && cmj && !lowElasticPass && <p className="text-sm mt-2">Recommended: basic extensive plyometrics, basic intensive plyometrics, and higher velocity lifting.</p>}</div>
         <div className="bg-background border border-border rounded-xl p-4"><p className="text-primary font-black mb-1">High-End Elastic Check</p><p className="text-sm text-muted-foreground">{cmj && drop ? (highElasticPass ? "Passed. Drop jump is sufficiently higher than CMJ." : "High stretch shortening cycle deficit detected: drop jump is not at least 2 inches or 10% higher than CMJ.") : "Enter CMJ and drop jump."}</p>{cmj && drop && !highElasticPass && <p className="text-sm mt-2">Recommended: intensive plyometrics, depth jumps, reactive jumps, and eccentric-focused training.</p>}</div>
       </div>
       {nonCmj && cmj && drop && lowElasticPass && highElasticPass && <div className="bg-background border border-border rounded-xl p-4"><p className="text-primary font-black mb-1">Elastic Tests Passed</p><p className="text-sm">Use a long conjugate sequence: touch all qualities while focusing on one main quality each month.</p></div>}
       {rsiHistory.length >= 2 && <div className="h-44"><ResponsiveContainer width="100%" height="100%"><LineChart data={rsiHistory}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" /><XAxis dataKey="date" tick={{fill:"#8a8680",fontSize:11}} /><YAxis tick={{fill:"#8a8680",fontSize:11}} /><Tooltip content={<ChartTip />} /><Line type="monotone" dataKey="rsi" stroke="#159447" strokeWidth={2.5} /></LineChart></ResponsiveContainer></div>}
-      <div className="space-y-2">{[...tests].reverse().slice(0, 8).map(t => <div key={t.id} className="flex flex-wrap justify-between gap-2 border-b border-border pb-2 text-sm"><span>{shortDate(t.date)} - {t.type === "Squat Jump" ? "Non-Countermovement Jump" : t.type}</span><span className="text-primary font-semibold">{t.height}"{t.rsi ? ` | RSI ${t.rsi}` : ""}</span></div>)}</div>
+      <div className="grid md:grid-cols-3 gap-3">{(["Squat Jump","Countermovement Jump","Drop Jump"] as JumpTestEntry["type"][]).map(jump => {
+        const latestJump = [...tests].reverse().find(t => t.type === jump);
+        return <div key={jump} className="bg-background border border-border rounded-xl p-4"><p className="text-xs text-muted-foreground uppercase tracking-wide">{jump === "Squat Jump" ? "Non-Countermovement Jump" : jump}</p><p className="text-3xl font-black text-primary mt-1" style={{fontFamily:"'Roboto Slab',serif"}}>{latestJump ? `${latestJump.height}"` : "--"}</p>{latestJump?.notes&&<p className="text-xs text-muted-foreground mt-1">{latestJump.notes}</p>}</div>;
+      })}</div>
     </div>
   );
 }

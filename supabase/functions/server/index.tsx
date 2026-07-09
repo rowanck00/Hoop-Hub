@@ -377,10 +377,18 @@ app.post("/make-server-4cb0fb87/posts/:postId/report", async (c) => {
   if (!post) return c.json({ error: "Not found" }, 404);
   post.reports = Array.from(new Set([...(post.reports || []), userId]));
   post.reportCount = post.reports.length;
-  if (post.reportCount >= 3) post.removed = true;
   await kv.set(`post_${postId}`, post);
-  await pushNotif(post.userId, { type: "report", fromUserId: userId, fromName: "Community", postId, message: `Your post was reported${reason ? `: ${cleanText(reason, 120)}` : ""}` });
-  return c.json({ ok: true, hidden: post.removed, reportCount: post.reportCount });
+  const index: string[] = (await kv.get("user_index")) || [];
+  const profiles = await Promise.all(index.map(id => kv.get(`profile_${id}`)));
+  const admins = profiles.filter((p: any) => isAdminEmail(p?.email));
+  await Promise.all(admins.map((admin: any) => pushNotif(admin.userId, {
+    type: "report",
+    fromUserId: userId,
+    fromName: "Community Report",
+    postId,
+    message: `Post reported${reason ? `: ${cleanText(reason, 120)}` : ""}`,
+  })));
+  return c.json({ ok: true, hidden: false, reportCount: post.reportCount });
 });
 
 app.post("/make-server-4cb0fb87/block", async (c) => {
