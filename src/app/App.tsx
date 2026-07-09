@@ -1096,8 +1096,9 @@ function FlightTimeTool() {
   const [slowPlaying, setSlowPlaying] = useState(false);
   const flight = takeoff !== null && landing !== null && landing > takeoff ? landing - takeoff : 0;
   const vertical = flight ? verticalFromFlightTime(flight) : 0;
-  const contactTime = contactStart !== null && contactEnd !== null && contactEnd > contactStart ? contactEnd - contactStart : 0;
+  const contactTime = contactStart !== null && takeoff !== null && takeoff > contactStart ? takeoff - contactStart : 0;
   const rsi = vertical && contactTime ? Math.round((vertical / 39.37 / contactTime) * 100) / 100 : 0;
+  const flightContactRatio = flight && contactTime ? Math.round((flight / contactTime) * 100) / 100 : 0;
 
   const applySpeed = useCallback(() => {
     const video = videoRef.current;
@@ -1157,7 +1158,12 @@ function FlightTimeTool() {
   function markTakeoff() { if (videoRef.current) setTakeoff(videoRef.current.currentTime); }
   function markLanding() { if (videoRef.current) setLanding(videoRef.current.currentTime); }
   function markContactStart() { if (videoRef.current) setContactStart(videoRef.current.currentTime); }
-  function markContactEnd() { if (videoRef.current) setContactEnd(videoRef.current.currentTime); }
+  function markRsiTakeoff() {
+    if (!videoRef.current) return;
+    const t = videoRef.current.currentTime;
+    setTakeoff(t);
+    setContactEnd(t);
+  }
   function stepFrame(direction: -1 | 1) {
     const video = videoRef.current;
     if (!video) return;
@@ -1173,7 +1179,7 @@ function FlightTimeTool() {
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 mb-1"><Activity size={14} className="text-primary" /><span className="text-xs uppercase tracking-wider text-muted-foreground">Vertical Jump Flight Time</span></div>
-          <p className="text-xs text-muted-foreground">Use flight time for vertical, or switch to RSI mode and mark ground contact start/end.</p>
+          <p className="text-xs text-muted-foreground">Vertical uses takeoff to landing. RSI uses ground contact, takeoff, and landing.</p>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
           <button type="button" onClick={() => setMeasureMode("vertical")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${measureMode==="vertical"?"bg-primary text-primary-foreground":"bg-secondary text-secondary-foreground"}`}>Vertical</button>
@@ -1259,16 +1265,19 @@ function FlightTimeTool() {
             </>
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-2">
-                <button onClick={markContactStart} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Contact Start</button>
-                <button onClick={markContactEnd} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Takeoff</button>
+              <div className="grid grid-cols-3 gap-2">
+                <button onClick={markContactStart} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Ground Contact</button>
+                <button onClick={markRsiTakeoff} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Takeoff</button>
+                <button onClick={markLanding} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Landing</button>
               </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">Contact</p><p className="text-lg font-black text-primary">{contactTime ? `${contactTime.toFixed(3)}s` : "--"}</p></div>
-                <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">Vertical</p><p className="text-lg font-black text-primary">{vertical ? `${vertical}"` : "Mark vertical first"}</p></div>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">Ground Time</p><p className="text-lg font-black text-primary">{contactTime ? `${contactTime.toFixed(3)}s` : "--"}</p></div>
+                <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">Air Time</p><p className="text-lg font-black text-primary">{flight ? `${flight.toFixed(3)}s` : "--"}</p></div>
+                <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">Vertical</p><p className="text-lg font-black text-primary">{vertical ? `${vertical}"` : "--"}</p></div>
                 <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">RSI</p><p className="text-lg font-black text-primary">{rsi || "--"}</p></div>
+                <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">Air/Ground</p><p className="text-lg font-black text-primary">{flightContactRatio || "--"}</p></div>
               </div>
-              <p className="text-xs text-muted-foreground">For RSI, first use Vertical mode to mark flight time, then switch here and mark ground contact start and takeoff.</p>
+              <p className="text-xs text-muted-foreground">RSI here uses jump height in meters divided by ground contact time. Air/Ground is shown too because some coaches track flight-time to contact-time ratio.</p>
             </>
           )}
         </div>
