@@ -84,26 +84,6 @@ function isAdmin(p?: UserProfile | MiniProfile | null) { return p?.role === "adm
 function withRole<T extends { email?: string; role?: "admin" | "player" }>(p: T): T {
   return { ...p, role: p.role === "admin" || ADMIN_EMAILS.includes((p.email || "").toLowerCase()) ? "admin" : "player" };
 }
-function mergeData(local?: AppData | null, remote?: AppData | null): AppData {
-  const base = emptyData();
-  const sessions = new Map<string, number>();
-  [...(local?.sessions || []), ...(remote?.sessions || [])].forEach(s => sessions.set(s.date, Math.max(sessions.get(s.date) || 0, s.minutes || 0)));
-  const shots = new Map<string, { made: number; attempted: number; date: string }>();
-  [...(local?.shots || []), ...(remote?.shots || [])].forEach(s => {
-    const prev = shots.get(s.date) || { made: 0, attempted: 0, date: s.date };
-    shots.set(s.date, { date: s.date, made: Math.max(prev.made, s.made || 0), attempted: Math.max(prev.attempted, s.attempted || 0) });
-  });
-  return {
-    ...base,
-    ...(local || {}),
-    ...(remote || {}),
-    sessions: [...sessions.entries()].map(([date, minutes]) => ({ date, minutes })).sort((a, b) => a.date.localeCompare(b.date)),
-    shots: [...shots.values()].sort((a, b) => a.date.localeCompare(b.date)),
-    strength: remote?.strength || local?.strength || base.strength,
-    streak: Math.max(local?.streak || 0, remote?.streak || 0),
-    lastPracticeDate: [local?.lastPracticeDate || "", remote?.lastPracticeDate || ""].sort().pop() || "",
-  };
-}
 function shootingPct(shots: ShotEntry[]) {
   const m = shots.reduce((a, b) => a + b.made, 0), a = shots.reduce((a, b) => a + b.attempted, 0);
   return a === 0 ? 0 : Math.round((m / a) * 100);
@@ -157,15 +137,35 @@ const localProfile = (uid: string) => lsGet(`hh_profile_${uid}`);
 const localData    = (uid: string) => lsGet(`hh_data_${uid}`);
 const saveLocalProfile = (p: UserProfile) => lsSet(`hh_profile_${p.userId}`, p);
 const saveLocalData    = (uid: string, d: AppData) => lsSet(`hh_data_${uid}`, d);
+const pendingProfile = (uid: string) => lsGet(`hh_pending_profile_${uid}`);
+const pendingData    = (uid: string) => lsGet(`hh_pending_data_${uid}`);
+const clearPendingProfile = (uid: string) => { try { localStorage.removeItem(`hh_pending_profile_${uid}`); } catch {} };
+const clearPendingData    = (uid: string) => { try { localStorage.removeItem(`hh_pending_data_${uid}`); } catch {} };
 
 // ─── Background API (never blocks the UI) ────────────────────────────────────
 const bg = (url: string, opts?: RequestInit) =>
   fetch(url, { signal: AbortSignal.timeout(6000), headers: { "Content-Type": "application/json" }, ...opts }).catch(() => {});
 
-const bgPost = (userId: string, p: UserProfile) =>
-  bg(`${SERVER}/profile`, { method: "POST", body: JSON.stringify({ userId, ...p }) });
-const bgData = (userId: string, d: AppData) =>
-  bg(`${SERVER}/gamedata`, { method: "POST", body: JSON.stringify({ userId, data: d }) });
+async function saveProfileCloud(userId: string, p: UserProfile) {
+  saveLocalProfile(p);
+  lsSet(`hh_pending_profile_${userId}`, p);
+  const res = await apiPost("/profile", { userId, ...p });
+  if (res?.ok) clearPendingProfile(userId);
+  return !!res?.ok;
+}
+async function saveDataCloud(userId: string, d: AppData) {
+  saveLocalData(userId, d);
+  lsSet(`hh_pending_data_${userId}`, d);
+  const res = await apiPost("/gamedata", { userId, data: d });
+  if (res?.ok) clearPendingData(userId);
+  return !!res?.ok;
+}
+async function flushPendingSync(userId: string) {
+  const pp = pendingProfile(userId);
+  if (pp) await saveProfileCloud(userId, pp);
+  const pd = pendingData(userId);
+  if (pd) await saveDataCloud(userId, pd);
+}
 
 async function apiFetch<T>(path: string, fallback: T): Promise<T> {
   try { const r = await fetch(`${SERVER}${path}`, { signal: AbortSignal.timeout(6000) }); return await r.json(); }
@@ -898,8 +898,7 @@ function ProfileSetup({ userId, email, onComplete }: { userId: string; email: st
     e.preventDefault();
     if (!form.firstName.trim() || !form.lastName.trim()) return;
     const profile: UserProfile = withRole({ userId, email, ...form, firstName: sanitizeText(form.firstName), lastName: sanitizeText(form.lastName), avatarUrl: sanitizeImageUrl(form.avatarUrl) });
-    saveLocalProfile(profile);
-    bgPost(userId, profile);
+    void saveProfileCloud(userId, profile);
     onComplete(profile);
   }
 
@@ -1257,6 +1256,7 @@ export default function App() {
   useEffect(() => {
     async function loadUser(uid: string, email: string) {
       setUserId(uid); setUserEmail(email);
+      await flushPendingSync(uid);
       // 1. Try localStorage first (instant)
       const lp = localProfile(uid);
       const ld = localData(uid);
@@ -1274,18 +1274,17 @@ export default function App() {
         ]);
         const serverProfile = profileRes.profile ? withRole({ ...profileRes.profile, email: profileRes.profile.email || email }) : null;
         if (serverProfile) {
-          const merged = mergeData(ld, dataRes.data);
+          const cloudData = dataRes.data || ld || emptyData();
           saveLocalProfile(serverProfile);
-          saveLocalData(uid, merged);
+          saveLocalData(uid, cloudData);
           setProfile(serverProfile);
-          setData(merged);
+          setData(cloudData);
           setAuthState("ready");
-          bgData(uid, merged);
           return;
         }
         if (lp) {
-          bgPost(uid, withRole({ ...lp, email: lp.email || email }));
-          if (ld) bgData(uid, ld);
+          await saveProfileCloud(uid, withRole({ ...lp, email: lp.email || email }));
+          if (ld) await saveDataCloud(uid, ld);
           return;
         }
       } catch { if (lp) return; }
@@ -1305,6 +1304,20 @@ export default function App() {
     });
     return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!userId) return;
+    const retry = () => { void flushPendingSync(userId); };
+    window.addEventListener("focus", retry);
+    window.addEventListener("online", retry);
+    document.addEventListener("visibilitychange", retry);
+    retry();
+    return () => {
+      window.removeEventListener("focus", retry);
+      window.removeEventListener("online", retry);
+      document.removeEventListener("visibilitychange", retry);
+    };
+  }, [userId]);
 
   function currentTimerSec() {
     if (!timerOn || timerStartedAtRef.current === null) return timerSec;
@@ -1356,12 +1369,12 @@ export default function App() {
 
   const updateData = useCallback((nd: AppData) => {
     setData(nd);
-    if (userId) { saveLocalData(userId, nd); bgData(userId, nd); }
+    if (userId) void saveDataCloud(userId, nd);
   }, [userId]);
 
   function handleProfileComplete(p: UserProfile) {
     const np = withRole(p);
-    setProfile(np); setData(emptyData()); saveLocalProfile(np); bgPost(np.userId, np); setAuthState("ready");
+    setProfile(np); setData(emptyData()); void saveProfileCloud(np.userId, np); void saveDataCloud(np.userId, emptyData()); setAuthState("ready");
   }
   async function handleLogout() { await supabase.auth.signOut(); setUserId(null); setProfile(null); setData(emptyData()); setAuthState("unauthenticated"); }
   async function copyShareLink() {
@@ -1494,8 +1507,7 @@ export default function App() {
           <EditableMeasurables profile={profile} onSave={updated => {
             const np = withRole({ ...profile, ...updated });
             setProfile(np);
-            saveLocalProfile(np);
-            bgPost(userId!, np);
+            void saveProfileCloud(userId!, np);
           }} />
 
           <div className="grid grid-cols-3 gap-4">
