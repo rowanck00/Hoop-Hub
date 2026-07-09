@@ -104,7 +104,11 @@ function shootingPct(shots: ShotEntry[]) {
 function extractYTId(url: string) { const m = url.match(/(?:youtu\.be\/|v=|\/embed\/)([A-Za-z0-9_-]{11})/); return m ? m[1] : null; }
 function isDirectVideoUrl(url?: string) { return !!url && /^https:\/\/.+\.(mp4|webm|mov)(\?.*)?$/i.test(url); }
 function verticalFromFlightTime(seconds: number) { return Math.max(0, Math.round(48.26 * seconds * seconds * 10) / 10); }
-function est1rm(weight: number, reps: number) { return Math.round(weight * (1 + reps / 30)); }
+function est1rm(weight: number, reps: number) {
+  if (reps <= 1) return Math.round(weight);
+  if (reps <= 10) return Math.round(weight * (36 / (37 - reps)));
+  return Math.round(weight * (1 + reps / 30));
+}
 function uploadPathName(name: string, fallback: string) {
   const ext = (name.split(".").pop() || fallback).toLowerCase().replace(/[^a-z0-9]/g, "") || fallback;
   return `${Date.now()}-${crypto.randomUUID()}.${ext}`;
@@ -1079,8 +1083,11 @@ function FlightTimeTool() {
   const slowTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const speedRef = useRef(0.25);
   const [videoUrl, setVideoUrl] = useState("");
+  const [measureMode, setMeasureMode] = useState<"vertical" | "rsi">("vertical");
   const [takeoff, setTakeoff] = useState<number | null>(null);
   const [landing, setLanding] = useState<number | null>(null);
+  const [contactStart, setContactStart] = useState<number | null>(null);
+  const [contactEnd, setContactEnd] = useState<number | null>(null);
   const [fps, setFps] = useState(240);
   const [speed, setSpeed] = useState(0.25);
   const [videoTime, setVideoTime] = useState(0);
@@ -1088,6 +1095,8 @@ function FlightTimeTool() {
   const [slowPlaying, setSlowPlaying] = useState(false);
   const flight = takeoff !== null && landing !== null && landing > takeoff ? landing - takeoff : 0;
   const vertical = flight ? verticalFromFlightTime(flight) : 0;
+  const contactTime = contactStart !== null && contactEnd !== null && contactEnd > contactStart ? contactEnd - contactStart : 0;
+  const rsi = vertical && contactTime ? Math.round((vertical / 39.37 / contactTime) * 100) / 100 : 0;
 
   const applySpeed = useCallback(() => {
     const video = videoRef.current;
@@ -1139,11 +1148,15 @@ function FlightTimeTool() {
     setVideoUrl(URL.createObjectURL(file));
     setTakeoff(null);
     setLanding(null);
+    setContactStart(null);
+    setContactEnd(null);
     setVideoTime(0);
     setDuration(0);
   }
   function markTakeoff() { if (videoRef.current) setTakeoff(videoRef.current.currentTime); }
   function markLanding() { if (videoRef.current) setLanding(videoRef.current.currentTime); }
+  function markContactStart() { if (videoRef.current) setContactStart(videoRef.current.currentTime); }
+  function markContactEnd() { if (videoRef.current) setContactEnd(videoRef.current.currentTime); }
   function stepFrame(direction: -1 | 1) {
     const video = videoRef.current;
     if (!video) return;
@@ -1159,7 +1172,7 @@ function FlightTimeTool() {
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 mb-1"><Activity size={14} className="text-primary" /><span className="text-xs uppercase tracking-wider text-muted-foreground">Vertical Jump Flight Time</span></div>
-          <p className="text-xs text-muted-foreground">Record or choose a jump video, pause on takeoff and landing, and the app converts flight time to vertical.</p>
+          <p className="text-xs text-muted-foreground">Use flight time for vertical, or switch to RSI mode and mark ground contact start/end.</p>
         </div>
         <label className="bg-primary text-primary-foreground rounded-xl px-3 py-2 text-xs font-semibold cursor-pointer whitespace-nowrap">
           Choose Video
@@ -1169,6 +1182,10 @@ function FlightTimeTool() {
 
       {videoUrl ? (
         <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={() => setMeasureMode("vertical")} className={`rounded-xl py-2 text-sm font-semibold ${measureMode==="vertical"?"bg-primary text-primary-foreground":"bg-secondary text-secondary-foreground"}`}>Vertical</button>
+            <button type="button" onClick={() => setMeasureMode("rsi")} className={`rounded-xl py-2 text-sm font-semibold ${measureMode==="rsi"?"bg-primary text-primary-foreground":"bg-secondary text-secondary-foreground"}`}>RSI</button>
+          </div>
           <video
             ref={videoRef}
             src={videoUrl}
@@ -1227,15 +1244,32 @@ function FlightTimeTool() {
             <button type="button" onClick={() => { stopSlowPlay(); seekTo(videoTime + 5 / fps); }} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">+5 frames</button>
           </div>
           <p className="text-xs text-muted-foreground text-center">If 240 fps barely moves, try 60 fps. Some phones export slow-mo as a 30 fps playback file.</p>
-          <div className="grid grid-cols-2 gap-2">
-            <button onClick={markTakeoff} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Takeoff</button>
-            <button onClick={markLanding} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Landing</button>
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">Takeoff</p><p className="text-lg font-black text-primary">{takeoff === null ? "--" : `${takeoff.toFixed(2)}s`}</p></div>
-            <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">Flight</p><p className="text-lg font-black text-primary">{flight ? `${flight.toFixed(2)}s` : "--"}</p></div>
-            <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">Vertical</p><p className="text-lg font-black text-primary">{vertical ? `${vertical}"` : "--"}</p></div>
-          </div>
+          {measureMode === "vertical" ? (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={markTakeoff} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Takeoff</button>
+                <button onClick={markLanding} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Landing</button>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">Takeoff</p><p className="text-lg font-black text-primary">{takeoff === null ? "--" : `${takeoff.toFixed(2)}s`}</p></div>
+                <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">Flight</p><p className="text-lg font-black text-primary">{flight ? `${flight.toFixed(2)}s` : "--"}</p></div>
+                <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">Vertical</p><p className="text-lg font-black text-primary">{vertical ? `${vertical}"` : "--"}</p></div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={markContactStart} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Contact Start</button>
+                <button onClick={markContactEnd} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Takeoff</button>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">Contact</p><p className="text-lg font-black text-primary">{contactTime ? `${contactTime.toFixed(3)}s` : "--"}</p></div>
+                <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">Vertical</p><p className="text-lg font-black text-primary">{vertical ? `${vertical}"` : "Mark vertical first"}</p></div>
+                <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">RSI</p><p className="text-lg font-black text-primary">{rsi || "--"}</p></div>
+              </div>
+              <p className="text-xs text-muted-foreground">For RSI, first use Vertical mode to mark flight time, then switch here and mark ground contact start and takeoff.</p>
+            </>
+          )}
         </div>
       ) : (
         <div className="border border-dashed border-border rounded-xl p-6 text-center text-sm text-muted-foreground">
@@ -1322,33 +1356,44 @@ function TrainingPlanBuilder({ data, onUpdate }: { data: AppData; onUpdate: (d: 
 }
 
 function JumpTestingSection({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData) => void }) {
-  const [type, setType] = useState<JumpTestEntry["type"]>("Countermovement Jump");
+  const [type, setType] = useState<JumpTestEntry["type"]>("Squat Jump");
   const [height, setHeight] = useState("");
   const [contact, setContact] = useState("");
+  const [boxHeight, setBoxHeight] = useState("18");
   const [notes, setNotes] = useState("");
   const tests = data.jumpTests || [];
   const rsiHistory = tests.filter(t => t.rsi).map(t => ({ date: shortDate(t.date), rsi: t.rsi }));
+  const latest = (t: JumpTestEntry["type"]) => [...tests].reverse().find(x => x.type === t)?.height || 0;
+  const nonCmj = latest("Squat Jump"), cmj = latest("Countermovement Jump"), drop = latest("Drop Jump");
+  const lowElasticPass = nonCmj && cmj && (cmj - nonCmj >= Math.max(2, nonCmj * 0.1));
+  const highElasticPass = cmj && drop && (drop - cmj >= Math.max(2, cmj * 0.1));
   function save() {
     const h = parseFloat(height), c = parseFloat(contact);
     if (!h) return;
-    const entry: JumpTestEntry = { id: crypto.randomUUID(), date: new Date().toISOString().slice(0,10), type, height: h, contactTime: c || undefined, rsi: c ? Math.round((h / 39.37 / c) * 100) / 100 : undefined, notes: notes.trim() };
+    const extra = type === "Drop Jump" ? `Box: ${boxHeight} in${notes.trim() ? ` | ${notes.trim()}` : ""}` : notes.trim();
+    const entry: JumpTestEntry = { id: crypto.randomUUID(), date: new Date().toISOString().slice(0,10), type, height: h, contactTime: c || undefined, rsi: c ? Math.round((h / 39.37 / c) * 100) / 100 : undefined, notes: extra };
     onUpdate({ ...data, jumpTests: [...tests, entry] });
     setHeight(""); setContact(""); setNotes("");
   }
   return (
     <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
-      <div className="flex items-center gap-2"><Activity size={14} className="text-primary"/><span className="text-xs uppercase tracking-wider text-muted-foreground">Jump Testing</span></div>
+      <div><div className="flex items-center gap-2"><Activity size={14} className="text-primary"/><span className="text-xs uppercase tracking-wider text-muted-foreground">Elastic Deficit Testing</span></div><p className="text-xs text-muted-foreground mt-1">Test non-countermovement jump, countermovement jump, and an 18-24 inch drop jump. Passing means roughly a 2 inch or 10% increase between tests.</p></div>
       <div className="grid md:grid-cols-4 gap-3">
         <select value={type} onChange={e => setType(e.target.value as JumpTestEntry["type"])} className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none">
-          <option>Squat Jump</option><option>Countermovement Jump</option><option>Drop Jump</option>
+          <option value="Squat Jump">Non-Countermovement Jump</option><option value="Countermovement Jump">Countermovement Jump</option><option value="Drop Jump">Drop Jump</option>
         </select>
         <input value={height} onChange={e => setHeight(e.target.value)} type="number" placeholder="Jump height (in)" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none" />
-        <input value={contact} onChange={e => setContact(e.target.value)} type="number" step="0.01" placeholder="Contact time (sec)" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none" />
+        {type === "Drop Jump" ? <select value={boxHeight} onChange={e => setBoxHeight(e.target.value)} className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none"><option value="18">18 inch box</option><option value="24">24 inch box</option></select> : <input value={contact} onChange={e => setContact(e.target.value)} type="number" step="0.01" placeholder="Contact time (sec)" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none" />}
         <button onClick={save} className="bg-primary text-primary-foreground rounded-xl px-3 py-2 text-sm font-semibold">Save Test</button>
       </div>
       <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Notes" className="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none" />
+      <div className="grid md:grid-cols-2 gap-3">
+        <div className="bg-background border border-border rounded-xl p-4"><p className="text-primary font-black mb-1">Low-End Elastic Check</p><p className="text-sm text-muted-foreground">{nonCmj && cmj ? (lowElasticPass ? "Passed. CMJ is sufficiently higher than non-countermovement jump." : "Inelastic deficit detected: CMJ is not at least 2 inches or 10% higher. This points to low-end stretch shortening cycle and basic eccentric limitations.") : "Enter non-countermovement jump and CMJ."}</p>{nonCmj && cmj && !lowElasticPass && <p className="text-sm mt-2">Recommended: basic extensive plyometrics, basic intensive plyometrics, and higher velocity lifting.</p>}</div>
+        <div className="bg-background border border-border rounded-xl p-4"><p className="text-primary font-black mb-1">High-End Elastic Check</p><p className="text-sm text-muted-foreground">{cmj && drop ? (highElasticPass ? "Passed. Drop jump is sufficiently higher than CMJ." : "High stretch shortening cycle deficit detected: drop jump is not at least 2 inches or 10% higher than CMJ.") : "Enter CMJ and drop jump."}</p>{cmj && drop && !highElasticPass && <p className="text-sm mt-2">Recommended: intensive plyometrics, depth jumps, reactive jumps, and eccentric-focused training.</p>}</div>
+      </div>
+      {nonCmj && cmj && drop && lowElasticPass && highElasticPass && <div className="bg-background border border-border rounded-xl p-4"><p className="text-primary font-black mb-1">Elastic Tests Passed</p><p className="text-sm">Use a long conjugate sequence: touch all qualities while focusing on one main quality each month.</p></div>}
       {rsiHistory.length >= 2 && <div className="h-44"><ResponsiveContainer width="100%" height="100%"><LineChart data={rsiHistory}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" /><XAxis dataKey="date" tick={{fill:"#8a8680",fontSize:11}} /><YAxis tick={{fill:"#8a8680",fontSize:11}} /><Tooltip content={<ChartTip />} /><Line type="monotone" dataKey="rsi" stroke="#159447" strokeWidth={2.5} /></LineChart></ResponsiveContainer></div>}
-      <div className="space-y-2">{[...tests].reverse().slice(0, 8).map(t => <div key={t.id} className="flex flex-wrap justify-between gap-2 border-b border-border pb-2 text-sm"><span>{shortDate(t.date)} - {t.type}</span><span className="text-primary font-semibold">{t.height}"{t.rsi ? ` | RSI ${t.rsi}` : ""}</span></div>)}</div>
+      <div className="space-y-2">{[...tests].reverse().slice(0, 8).map(t => <div key={t.id} className="flex flex-wrap justify-between gap-2 border-b border-border pb-2 text-sm"><span>{shortDate(t.date)} - {t.type === "Squat Jump" ? "Non-Countermovement Jump" : t.type}</span><span className="text-primary font-semibold">{t.height}"{t.rsi ? ` | RSI ${t.rsi}` : ""}</span></div>)}</div>
     </div>
   );
 }
@@ -1365,9 +1410,9 @@ function AthleticAnalysisSection({ data, onUpdate }: { data: AppData; onUpdate: 
   if (powerRatio) findings.push(powerRatio < 0.7
     ? { title: "Power Deficit Detected", text: "The model suggests you produce force well but may struggle to express it explosively.", recs: "Olympic lifting, jump squats, sprinting, ballistic movements, high-velocity lifting." }
     : { title: "Strength Deficit Detected", text: "The model suggests your explosive expression is solid relative to your max strength.", recs: "Heavy squats, front squats, and max strength work." });
-  if (sj && cmj && (cmj - sj < Math.max(2, sj * 0.1))) findings.push({ title: "Low Stretch Shortening Cycle Utilization", text: "Countermovement jump is not much higher than squat jump.", recs: "Extensive plyometrics, basic intensive plyometrics, high-velocity lifting." });
-  if (cmj && dj && (dj - cmj < Math.max(2, cmj * 0.1))) findings.push({ title: "High Stretch Shortening Cycle Deficit", text: "Drop jump is not much higher than countermovement jump.", recs: "Intensive plyometrics, depth jumps, reactive jumps, eccentric-focused training." });
-  if (!findings.length) findings.push({ title: "Balanced Athlete", text: "No major deficit is flagged by this app model.", recs: "Maintain all qualities with a long conjugate sequence and one primary focus each block." });
+  if (sj && cmj && (cmj - sj < Math.max(2, sj * 0.1))) findings.push({ title: "Low-End Elastic Deficit", text: "CMJ is not at least 2 inches or 10% higher than non-countermovement jump, indicating low-end stretch shortening cycle and basic eccentric limitations.", recs: "Basic extensive plyometrics, basic intensive plyometrics, and higher velocity lifting." });
+  if (cmj && dj && (dj - cmj < Math.max(2, cmj * 0.1))) findings.push({ title: "High Stretch Shortening Cycle Deficit", text: "Drop jump is not at least 2 inches or 10% higher than CMJ, indicating limited high-end stretch shortening cycle use.", recs: "Intensive plyometrics, shock plyos like depth jumps, reactive jumps, and eccentric-focused training." });
+  if (!findings.length) findings.push({ title: "Balanced Athlete", text: "No major deficit is flagged by this app model.", recs: "Use a long conjugate sequence system: touch everything while focusing on one specific quality each month." });
   return (
     <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
       <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Athletic Analysis</p><p className="text-xs text-muted-foreground mt-1">These are recommendations from the app model, not absolute scientific conclusions.</p></div>
