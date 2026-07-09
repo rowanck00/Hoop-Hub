@@ -1500,9 +1500,6 @@ function TrainingView({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData
     <div className="space-y-6">
       <ViewHero img="1519861531473-9200262188bf" title="Training" sub="Long-term progress" />
       <WorkoutPlanner data={data} onUpdate={onUpdate} />
-      <FlightTimeTool />
-      <JumpTestingSection data={data} onUpdate={onUpdate} />
-      <AthleticAnalysisSection data={data} onUpdate={onUpdate} />
       <div className="bg-card border border-border rounded-2xl p-6">
         <div className="flex items-center gap-2 mb-5"><Clock size={14} className="text-primary" /><span className="text-xs uppercase tracking-wider text-muted-foreground">Weekly Volume (last 8 weeks)</span></div>
         <div className="h-52"><ResponsiveContainer width="100%" height="100%"><BarChart id="t-weekly" data={weeklyData} barSize={28} margin={{ top:4,right:4,bottom:0,left:-20 }}>
@@ -1547,7 +1544,9 @@ function StrengthView({ data, onUpdate, userId }: { data: AppData; onUpdate: (d:
   return (
     <div className="space-y-6">
       <ViewHero img="1581009146145-b5ef050c2e1e" title="Strength" sub="Track your lifts" />
-      <TrainingPlanBuilder data={data} onUpdate={onUpdate} />
+      <FlightTimeTool />
+      <JumpTestingSection data={data} onUpdate={onUpdate} />
+      <AthleticAnalysisSection data={data} onUpdate={onUpdate} />
       <div className="bg-card border border-border rounded-2xl p-4"><p className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Best Estimated 1RM</p><p className="text-3xl font-black text-primary" style={{fontFamily:"'Roboto Slab',serif"}}>{bestEst ? `${bestEst} ${ex.unit}` : "-"}</p></div>
       <div className="flex flex-wrap gap-2">
         {data.strength.map((e,i)=><button key={i} onClick={()=>{setSel(i);setAdding(false);}} className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${i===sel?"bg-primary text-primary-foreground":"bg-secondary text-secondary-foreground hover:bg-muted"}`}>{e.name}</button>)}
