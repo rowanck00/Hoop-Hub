@@ -3,8 +3,7 @@ import {
   Flame, Target, Clock, TrendingUp, Plus, Minus, RotateCcw,
   Play, Pause, Check, X, ChevronLeft, Dumbbell, ArrowRight,
   LogOut, Users, Globe, Copy, ExternalLink, Search,
-  Heart, MessageCircle, Repeat2, Quote, Trash2, Video,
-  Activity, Trophy, Edit3,
+  Heart, MessageCircle, Repeat2, Quote, Trash2, Video, Edit3,
 } from "lucide-react";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis,
@@ -13,10 +12,9 @@ import {
 import { createClient } from "@supabase/supabase-js";
 
 const projectId = "wnzmsvcimrvmbzmmmixn";
-const supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Induem1zdmNpbXJ2bWJ6bW1taXhuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyNzEwMDYsImV4cCI6MjA5ODg0NzAwNn0.Pl_uW2lVit3V8dK6P6a8Ym_50vxTvPoFVsVypjqMVXs";
 const supabase = createClient(
   `https://${projectId}.supabase.co`,
-  supabaseAnonKey
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Induem1zdmNpbXJ2bWJ6bW1taXhuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyNzEwMDYsImV4cCI6MjA5ODg0NzAwNn0.Pl_uW2lVit3V8dK6P6a8Ym_50vxTvPoFVsVypjqMVXs"
 );
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -25,7 +23,7 @@ type AuthState = "loading" | "unauthenticated" | "needs_profile" | "ready";
 
 interface UserProfile {
   userId: string; firstName: string; lastName: string; email: string;
-  username?: string; displayName?: string; avatarUrl?: string; createdAt?: string;
+  role?: "admin" | "player"; avatarUrl?: string;
   position: string; gradYear: string; height: string; weight: string;
   wingspan: string; vertical: string; bio: string; isPublic: boolean;
   strengths: string; weaknesses: string;
@@ -36,8 +34,7 @@ interface Team {
   memberProfiles: { userId: string; firstName: string; lastName: string; position: string; }[];
   createdAt: string;
 }
-interface MiniProfile { firstName: string; lastName: string; position: string; username?: string; displayName?: string; avatarUrl?: string; }
-interface TaggedUser extends MiniProfile { userId: string; }
+interface MiniProfile { firstName: string; lastName: string; position: string; avatarUrl?: string; role?: "admin" | "player"; }
 interface PostData {
   id: string; userId: string; content: string;
   videoUrl?: string; videoId?: string;
@@ -64,14 +61,49 @@ interface AppData {
 // ─── Config ───────────────────────────────────────────────────────────────────
 const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
 const TEAM_LEVELS = ["Men's League", "High School", "College", "Pro / Overseas", "Club / Recreational"];
-const SERVER = `https://${projectId}.supabase.co/functions/v1/server/make-server-4cb0fb87`;
+const SERVER = `https://${projectId}.supabase.co/functions/v1/make-server-4cb0fb87`;
 const APP_NAME = "HOOP HUB";
 const APP_TAGLINE = "Track your game. Own your grind.";
+const ADMIN_EMAILS = ["rowanck00@gmail.com"];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function makeDate(d: number) { return new Date(Date.now() - d * 86400000).toISOString().slice(0, 10); }
 function shortDate(iso: string) { return new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }); }
 function formatTime(s: number) { return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); }
+function lastDays(n: number) { return Array.from({ length: n }, (_, i) => makeDate(n - 1 - i)); }
+function sanitizeText(s: string, max = 80) { return s.replace(/\s+/g, " ").trim().slice(0, max); }
+function sanitizeImageUrl(url: string) {
+  const clean = url.trim();
+  if (!clean) return "";
+  try {
+    const u = new URL(clean);
+    return u.protocol === "https:" ? u.toString().slice(0, 500) : "";
+  } catch { return ""; }
+}
+function isAdmin(p?: UserProfile | MiniProfile | null) { return p?.role === "admin"; }
+function withRole<T extends { email?: string; role?: "admin" | "player" }>(p: T): T {
+  return { ...p, role: p.role === "admin" || ADMIN_EMAILS.includes((p.email || "").toLowerCase()) ? "admin" : "player" };
+}
+function mergeData(local?: AppData | null, remote?: AppData | null): AppData {
+  const base = emptyData();
+  const sessions = new Map<string, number>();
+  [...(local?.sessions || []), ...(remote?.sessions || [])].forEach(s => sessions.set(s.date, Math.max(sessions.get(s.date) || 0, s.minutes || 0)));
+  const shots = new Map<string, { made: number; attempted: number; date: string }>();
+  [...(local?.shots || []), ...(remote?.shots || [])].forEach(s => {
+    const prev = shots.get(s.date) || { made: 0, attempted: 0, date: s.date };
+    shots.set(s.date, { date: s.date, made: Math.max(prev.made, s.made || 0), attempted: Math.max(prev.attempted, s.attempted || 0) });
+  });
+  return {
+    ...base,
+    ...(local || {}),
+    ...(remote || {}),
+    sessions: [...sessions.entries()].map(([date, minutes]) => ({ date, minutes })).sort((a, b) => a.date.localeCompare(b.date)),
+    shots: [...shots.values()].sort((a, b) => a.date.localeCompare(b.date)),
+    strength: remote?.strength || local?.strength || base.strength,
+    streak: Math.max(local?.streak || 0, remote?.streak || 0),
+    lastPracticeDate: [local?.lastPracticeDate || "", remote?.lastPracticeDate || ""].sort().pop() || "",
+  };
+}
 function shootingPct(shots: ShotEntry[]) {
   const m = shots.reduce((a, b) => a + b.made, 0), a = shots.reduce((a, b) => a + b.attempted, 0);
   return a === 0 ? 0 : Math.round((m / a) * 100);
@@ -93,7 +125,7 @@ function defaultStrength(): StrengthExercise[] {
   ];
 }
 function emptyData(): AppData { return { streak: 0, lastPracticeDate: "", shots: [], sessions: [], strength: defaultStrength() }; }
-function initials(p?: MiniProfile | null) { return p ? `${p.firstName[0] ?? ""}${p.lastName[0] ?? ""}`.toUpperCase() : "?"; }
+function initials(p?: MiniProfile | null) { return p ? `${p.firstName?.[0] ?? ""}${p.lastName?.[0] ?? ""}`.toUpperCase() : "?"; }
 
 // ─── Rank system ──────────────────────────────────────────────────────────────
 const RANKS = [
@@ -119,239 +151,14 @@ const GRAD_YEARS = Array.from({ length: 10 }, (_, i) => String(new Date().getFul
 // ─── Local Storage (instant, no network) ──────────────────────────────────────
 const lsGet = (k: string) => { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : null; } catch { return null; } };
 const lsSet = (k: string, v: any) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
-const emailKey = (email: string) => email.trim().toLowerCase();
-const slugify = (s: string) => s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "").slice(0, 24);
 const localProfile = (uid: string) => lsGet(`hh_profile_${uid}`);
-const localProfileByEmail = (email: string) => email ? lsGet(`hh_profile_email_${emailKey(email)}`) : null;
 const localData    = (uid: string) => lsGet(`hh_data_${uid}`);
-const localDataByEmail = (email: string) => email ? lsGet(`hh_data_email_${emailKey(email)}`) : null;
-const saveLocalProfile = (p: UserProfile) => {
-  lsSet(`hh_profile_${p.userId}`, p);
-  if (p.email) lsSet(`hh_profile_email_${emailKey(p.email)}`, p);
-};
-const saveLocalData = (uid: string, d: AppData, email = "") => {
-  lsSet(`hh_data_${uid}`, d);
-  if (email) lsSet(`hh_data_email_${emailKey(email)}`, d);
-};
-const localPosts = (): PostData[] => lsGet("hh_local_posts") || [];
-const saveLocalPosts = (posts: PostData[]) => lsSet("hh_local_posts", posts);
-const saveLocalPost = (post: PostData) => {
-  const posts = localPosts().filter(p => p.id !== post.id);
-  saveLocalPosts([post, ...posts].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 100));
-};
-const mergePosts = (serverPosts: PostData[], savedPosts: PostData[]) => {
-  const byId = new Map<string, PostData>();
-  [...savedPosts, ...serverPosts].forEach(p => byId.set(p.id, p));
-  return Array.from(byId.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-};
-function profileDisplay(p?: MiniProfile | UserProfile | null) {
-  if (!p) return "Player";
-  return (p.displayName || `${p.firstName || ""} ${p.lastName || ""}`.trim() || p.username || "Player").trim();
-}
-function miniProfile(p: any): MiniProfile {
-  return {
-    firstName: p?.firstName || p?.first_name || "",
-    lastName: p?.lastName || p?.last_name || "",
-    position: p?.position || "",
-    username: p?.username || "",
-    displayName: p?.displayName || p?.display_name || "",
-    avatarUrl: p?.avatarUrl || p?.avatar_url || "",
-  };
-}
-function dbProfileToApp(row: any): UserProfile {
-  return {
-    userId: row.user_id,
-    email: row.email || "",
-    username: row.username || "",
-    displayName: row.display_name || "",
-    avatarUrl: row.avatar_url || "",
-    createdAt: row.created_at || "",
-    firstName: row.first_name || "",
-    lastName: row.last_name || "",
-    position: row.position || "",
-    gradYear: row.grad_year || "",
-    height: row.height || "",
-    weight: row.weight || "",
-    wingspan: row.wingspan || "",
-    vertical: row.vertical || "",
-    bio: row.bio || "",
-    isPublic: row.is_public !== false,
-    strengths: row.strengths || "",
-    weaknesses: row.weaknesses || "",
-  };
-}
-function appProfileToDb(p: UserProfile) {
-  const displayName = (p.displayName || `${p.firstName} ${p.lastName}`.trim()).trim();
-  const username = slugify(p.username || displayName || p.email.split("@")[0] || p.userId.slice(0, 8)) || p.userId.slice(0, 8);
-  return {
-    user_id: p.userId,
-    email: p.email,
-    username,
-    display_name: displayName,
-    avatar_url: p.avatarUrl || "",
-    first_name: p.firstName || "",
-    last_name: p.lastName || "",
-    position: p.position || "",
-    grad_year: p.gradYear || "",
-    height: p.height || "",
-    weight: p.weight || "",
-    wingspan: p.wingspan || "",
-    vertical: p.vertical || "",
-    bio: p.bio || "",
-    is_public: p.isPublic !== false,
-    strengths: p.strengths || "",
-    weaknesses: p.weaknesses || "",
-    updated_at: new Date().toISOString(),
-  };
-}
-function dbPostToApp(row: any, profiles: Map<string, MiniProfile>, likes: Map<string, string[]>, replyCounts: Map<string, number>, quotedPost?: PostData | null): PostData {
-  const likedBy = likes.get(row.id) || [];
-  return {
-    id: row.id,
-    userId: row.user_id,
-    content: row.content || "",
-    videoUrl: row.video_url || undefined,
-    videoId: row.video_id || undefined,
-    replyTo: row.reply_to || undefined,
-    quotedPostId: row.quoted_post_id || undefined,
-    quotedPost: quotedPost || undefined,
-    createdAt: row.created_at,
-    likes: likedBy,
-    reposts: [],
-    likeCount: likedBy.length,
-    repostCount: 0,
-    replyCount: replyCounts.get(row.id) || 0,
-    profile: profiles.get(row.user_id) || { firstName: "Player", lastName: "", position: "" },
-  };
-}
-async function getDbProfile(userId: string) {
-  const { data, error } = await supabase.from("hh_profiles").select("*").eq("user_id", userId).maybeSingle();
-  if (error || !data) return null;
-  return dbProfileToApp(data);
-}
-async function saveDbProfile(profile: UserProfile) {
-  const { data, error } = await supabase.from("hh_profiles").upsert(appProfileToDb(profile), { onConflict: "user_id" }).select("*").single();
-  if (error) return null;
-  return dbProfileToApp(data);
-}
-async function getDbGameData(userId: string) {
-  const { data, error } = await supabase.from("hh_gamedata").select("data").eq("user_id", userId).maybeSingle();
-  if (error || !data?.data) return null;
-  return data.data as AppData;
-}
-async function saveDbGameData(userId: string, data: AppData) {
-  const { error } = await supabase.from("hh_gamedata").upsert({ user_id: userId, data, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
-  return !error;
-}
-async function enrichDbPosts(rows: any[]): Promise<PostData[]> {
-  if (!rows.length) return [];
-  const postIds = rows.map(r => r.id);
-  const userIds = Array.from(new Set(rows.map(r => r.user_id).filter(Boolean)));
-  const quotedIds = Array.from(new Set(rows.map(r => r.quoted_post_id).filter(Boolean)));
-  const [profileRes, likeRes, replyRes, quotedRes] = await Promise.all([
-    userIds.length ? supabase.from("hh_profiles").select("*").in("user_id", userIds) : Promise.resolve({ data: [] as any[] }),
-    supabase.from("hh_post_likes").select("post_id,user_id").in("post_id", postIds),
-    supabase.from("hh_posts").select("reply_to").in("reply_to", postIds),
-    quotedIds.length ? supabase.from("hh_posts").select("*").in("id", quotedIds) : Promise.resolve({ data: [] as any[] }),
-  ]);
-  const profiles = new Map<string, MiniProfile>();
-  (profileRes.data || []).forEach((p: any) => profiles.set(p.user_id, miniProfile(p)));
-  const likes = new Map<string, string[]>();
-  (likeRes.data || []).forEach((l: any) => likes.set(l.post_id, [...(likes.get(l.post_id) || []), l.user_id]));
-  const replyCounts = new Map<string, number>();
-  (replyRes.data || []).forEach((r: any) => replyCounts.set(r.reply_to, (replyCounts.get(r.reply_to) || 0) + 1));
-  const quotedRows = new Map<string, any>();
-  (quotedRes.data || []).forEach((q: any) => quotedRows.set(q.id, q));
-  return rows.map(row => {
-    const quoted = row.quoted_post_id && quotedRows.has(row.quoted_post_id)
-      ? dbPostToApp(quotedRows.get(row.quoted_post_id), profiles, likes, replyCounts)
-      : null;
-    return dbPostToApp(row, profiles, likes, replyCounts, quoted);
-  });
-}
-function rankedPosts(posts: PostData[], sort: "top" | "newest" = "top") {
-  if (sort === "newest") return [...posts].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  return [...posts].sort((a, b) => {
-    const score = (p: PostData) => {
-      const ageHours = Math.max(0, (Date.now() - new Date(p.createdAt).getTime()) / 3600000);
-      const recencyBonus = Math.max(0, 48 - ageHours);
-      return p.likeCount * 3 + p.replyCount * 2 + recencyBonus;
-    };
-    return score(b) - score(a);
-  });
-}
-async function fetchDbPosts(sort: "top" | "newest" = "top") {
-  const { data, error } = await supabase.from("hh_posts").select("*").is("reply_to", null).order("created_at", { ascending: false }).limit(100);
-  if (error) return [];
-  return rankedPosts(await enrichDbPosts(data || []), sort);
-}
-async function fetchDbUserPosts(userId: string) {
-  const { data, error } = await supabase.from("hh_posts").select("*").eq("user_id", userId).order("created_at", { ascending: false }).limit(100);
-  if (error) return [];
-  return await enrichDbPosts(data || []);
-}
-async function fetchDbPost(postId: string) {
-  const { data, error } = await supabase.from("hh_posts").select("*").eq("id", postId).maybeSingle();
-  if (error || !data) return null;
-  const posts = await enrichDbPosts([data]);
-  return posts[0] || null;
-}
-async function fetchDbReplies(postId: string) {
-  const { data, error } = await supabase.from("hh_posts").select("*").eq("reply_to", postId).order("created_at", { ascending: true }).limit(100);
-  if (error) return [];
-  return await enrichDbPosts(data || []);
-}
-async function createDbPost(body: any) {
-  const { data, error } = await supabase.from("hh_posts").insert({
-    user_id: body.userId,
-    content: body.content || "",
-    video_url: body.videoUrl || null,
-    video_id: body.videoUrl ? extractYTId(body.videoUrl) : null,
-    reply_to: body.replyTo || null,
-    quoted_post_id: body.quotedPostId || null,
-  }).select("*").single();
-  if (error || !data) return null;
-  const posts = await enrichDbPosts([data]);
-  return posts[0] || null;
-}
-async function toggleDbLike(postId: string, userId: string) {
-  const { data: existing } = await supabase.from("hh_post_likes").select("post_id").eq("post_id", postId).eq("user_id", userId).maybeSingle();
-  if (existing) await supabase.from("hh_post_likes").delete().eq("post_id", postId).eq("user_id", userId);
-  else await supabase.from("hh_post_likes").insert({ post_id: postId, user_id: userId });
-  const { count } = await supabase.from("hh_post_likes").select("*", { count: "exact", head: true }).eq("post_id", postId);
-  return { liked: !existing, likeCount: count || 0 };
-}
-async function deleteDbPost(postId: string) {
-  const { error } = await supabase.from("hh_posts").delete().eq("id", postId);
-  return !error;
-}
-async function fetchDbCommunity() {
-  const [{ data: profiles }, { data: gameRows }] = await Promise.all([
-    supabase.from("hh_profiles").select("*").eq("is_public", true).order("created_at", { ascending: false }),
-    supabase.from("hh_gamedata").select("*"),
-  ]);
-  const gameMap = new Map<string, AppData>();
-  (gameRows || []).forEach((g: any) => gameMap.set(g.user_id, g.data as AppData));
-  return (profiles || []).map((row: any) => {
-    const gamedata = gameMap.get(row.user_id) || emptyData();
-    const shots = gamedata.shots || [], sessions = gamedata.sessions || [];
-    const made = shots.reduce((a, b) => a + b.made, 0), att = shots.reduce((a, b) => a + b.attempted, 0);
-    return {
-      userId: row.user_id,
-      profile: dbProfileToApp(row),
-      summary: {
-        streak: gamedata.streak || 0,
-        shootingPct: att > 0 ? Math.round((made / att) * 100) : 0,
-        totalMinutes: sessions.reduce((a, b) => a + b.minutes, 0),
-        activeDays: sessions.filter(s => s.minutes > 0).length,
-      },
-    };
-  });
-}
+const saveLocalProfile = (p: UserProfile) => lsSet(`hh_profile_${p.userId}`, p);
+const saveLocalData    = (uid: string, d: AppData) => lsSet(`hh_data_${uid}`, d);
 
 // ─── Background API (never blocks the UI) ────────────────────────────────────
 const bg = (url: string, opts?: RequestInit) =>
-  fetch(url, { signal: AbortSignal.timeout(6000), headers: { "Content-Type": "application/json", "Authorization": `Bearer ${supabaseAnonKey}`, "apikey": supabaseAnonKey }, ...opts }).catch(() => {});
+  fetch(url, { signal: AbortSignal.timeout(6000), headers: { "Content-Type": "application/json" }, ...opts }).catch(() => {});
 
 const bgPost = (userId: string, p: UserProfile) =>
   bg(`${SERVER}/profile`, { method: "POST", body: JSON.stringify({ userId, ...p }) });
@@ -359,36 +166,11 @@ const bgData = (userId: string, d: AppData) =>
   bg(`${SERVER}/gamedata`, { method: "POST", body: JSON.stringify({ userId, data: d }) });
 
 async function apiFetch<T>(path: string, fallback: T): Promise<T> {
-  try {
-    if (path.startsWith("/profile/")) return { profile: await getDbProfile(path.split("/").pop() || "") } as T;
-    if (path.startsWith("/gamedata/")) return { data: await getDbGameData(path.split("/").pop() || "") } as T;
-    if (path === "/community") return { players: await fetchDbCommunity() } as T;
-    if (path.startsWith("/posts/user/")) return { posts: await fetchDbUserPosts(path.split("/").pop() || "") } as T;
-    if (path.endsWith("/replies") && path.startsWith("/posts/")) return { replies: await fetchDbReplies(path.split("/")[2]) } as T;
-    if (path.startsWith("/posts/")) return { post: await fetchDbPost(path.split("/")[2]) } as T;
-    if (path.startsWith("/posts")) {
-      const sort = path.includes("sort=newest") ? "newest" : "top";
-      return { posts: await fetchDbPosts(sort) } as T;
-    }
-  } catch { return fallback as any; }
-  try { const r = await fetch(`${SERVER}${path}`, { signal: AbortSignal.timeout(12000), headers: { "Authorization": `Bearer ${supabaseAnonKey}`, "apikey": supabaseAnonKey } }); return r.ok ? await r.json() : fallback as any; }
+  try { const r = await fetch(`${SERVER}${path}`, { signal: AbortSignal.timeout(6000) }); return await r.json(); }
   catch { return fallback as any; }
 }
 async function apiPost(path: string, body: any) {
-  try {
-    if (path === "/profile") {
-      const profile = await saveDbProfile(body as UserProfile);
-      return profile ? { ok: true, profile } : null;
-    }
-    if (path === "/gamedata") return (await saveDbGameData(body.userId, body.data)) ? { ok: true } : null;
-    if (path === "/posts") {
-      const post = await createDbPost(body);
-      return post ? { post } : null;
-    }
-    if (path.endsWith("/like") && path.startsWith("/posts/")) return await toggleDbLike(path.split("/")[2], body.userId);
-    if (path.endsWith("/repost") && path.startsWith("/posts/")) return { reposted: false, repostCount: 0 };
-  } catch { return null; }
-  try { const r = await fetch(`${SERVER}${path}`, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${supabaseAnonKey}`, "apikey": supabaseAnonKey }, body: JSON.stringify(body), signal: AbortSignal.timeout(12000) }); return r.ok ? await r.json() : null; }
+  try { const r = await fetch(`${SERVER}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(6000) }); return await r.json(); }
   catch { return null; }
 }
 
@@ -403,11 +185,6 @@ const fetchSocial   = async (userId: string) => apiFetch<{following:string[];fol
 const fetchNotifs   = async (userId: string) => { const d = await apiFetch<{notifications: any[]}>(`/notifications/${userId}`, {notifications:[]}); return d.notifications ?? []; };
 const markNotifsRead = (userId: string) => apiPost(`/notifications/${userId}/read`, {});
 const deleteTeam = (id: string) => bg(`${SERVER}/teams/${id}`, { method: "DELETE" });
-const fetchUserPosts = async (userId: string) => {
-  const d = await apiFetch<{posts: PostData[]}>(`/posts/user/${userId}`, {posts:[]});
-  return d.posts ?? [];
-};
-const fetchPost = async (postId: string) => { const d = await apiFetch<{post: PostData | null}>(`/posts/${postId}`, {post:null}); return d.post; };
 
 // ─── Chart Tip ────────────────────────────────────────────────────────────────
 const ChartTip = ({ active, payload, label, unit = "" }: any) => {
@@ -415,15 +192,17 @@ const ChartTip = ({ active, payload, label, unit = "" }: any) => {
   return (
     <div className="bg-card border border-border rounded-lg px-3 py-2 text-sm">
       <p className="text-muted-foreground mb-0.5">{label}</p>
-      <p className="text-primary font-semibold">{payload[0].value}{unit}</p>
+      {payload.map((item: any) => (
+        <p key={item.dataKey || item.name} className="text-primary font-semibold">{item.name ? `${item.name}: ` : ""}{item.value}{unit}</p>
+      ))}
     </div>
   );
 };
 
 // ─── Avatar ───────────────────────────────────────────────────────────────────
 const Avatar = ({ p, size = 9 }: { p?: MiniProfile | null; size?: number }) => (
-  <div className={`w-${size} h-${size} rounded-xl bg-primary/20 flex items-center justify-center text-sm font-black text-primary flex-shrink-0 overflow-hidden`} style={{ fontFamily: "'Roboto Slab',serif" }}>
-    {p?.avatarUrl ? <img src={p.avatarUrl} alt={profileDisplay(p)} className="w-full h-full object-cover" /> : initials(p)}
+  <div className={`w-${size} h-${size} rounded-xl bg-primary/20 flex items-center justify-center text-sm font-black text-primary flex-shrink-0`} style={{ fontFamily: "'Roboto Slab',serif" }}>
+    {p?.avatarUrl ? <img src={p.avatarUrl} alt="" className="w-full h-full object-cover rounded-xl" /> : initials(p)}
   </div>
 );
 
@@ -432,7 +211,7 @@ const QuotedPost = ({ post }: { post: PostData }) => (
   <div className="border border-border rounded-xl p-3 mt-2 space-y-1.5">
     <div className="flex items-center gap-2">
       <div className="w-5 h-5 rounded-lg bg-primary/20 flex items-center justify-center text-xs font-black text-primary">{initials(post.profile)}</div>
-      <span className="text-sm font-semibold">{profileDisplay(post.profile)}</span>
+      <span className="text-sm font-semibold">{post.profile?.firstName} {post.profile?.lastName}</span>
       {post.profile?.position && <span className="text-xs text-primary bg-primary/10 px-1.5 py-0.5 rounded-md">{post.profile.position}</span>}
     </div>
     {post.content && <p className="text-sm text-muted-foreground line-clamp-3">{post.content}</p>}
@@ -441,10 +220,11 @@ const QuotedPost = ({ post }: { post: PostData }) => (
 );
 
 // ─── Post Card ────────────────────────────────────────────────────────────────
-function PostCard({ post, currentUserId, currentUserName, onReply, onQuote, onUpdate, onDelete, onOpen, isReply = false }: {
+function PostCard({ post, currentUserId, currentUserName, canModerate = false, onReply, onQuote, onUpdate, onDelete, isReply = false }: {
   post: PostData; currentUserId?: string; currentUserName?: string;
+  canModerate?: boolean;
   onReply: (p: PostData) => void; onQuote: (p: PostData) => void;
-  onUpdate: (p: PostData) => void; onDelete: (id: string) => void; onOpen?: (p: PostData) => void; isReply?: boolean;
+  onUpdate: (p: PostData) => void; onDelete: (id: string) => void; isReply?: boolean;
 }) {
   const [showReplies, setShowReplies] = useState(false);
   const [replies, setReplies] = useState<PostData[]>([]);
@@ -470,49 +250,49 @@ function PostCard({ post, currentUserId, currentUserName, onReply, onQuote, onUp
   }
 
   return (
-    <div onClick={() => onOpen?.(post)} className={`bg-card border border-border rounded-2xl p-4 space-y-3 ${onOpen ? "cursor-pointer hover:border-primary/50 transition-colors" : ""} ${isReply ? "ml-4 border-l-2 border-l-primary/30" : ""}`}>
+    <div className={`bg-card border border-border rounded-2xl p-4 space-y-3 ${isReply ? "ml-4 border-l-2 border-l-primary/30" : ""}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <Avatar p={post.profile} size={9} />
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-semibold text-sm">{profileDisplay(post.profile)}</span>
+              <span className="font-semibold text-sm">{post.profile?.firstName} {post.profile?.lastName}</span>
               {post.profile?.position && <span className="text-xs text-primary bg-primary/10 px-1.5 py-0.5 rounded-md">{post.profile.position}</span>}
             </div>
             <span className="text-xs text-muted-foreground">{timeAgo(post.createdAt)}</span>
           </div>
         </div>
-        {currentUserId === post.userId && (
-          <button onClick={async (e) => { e.stopPropagation(); if (await deleteDbPost(post.id)) onDelete(post.id); }} className="text-muted-foreground hover:text-destructive p-1"><Trash2 size={13} /></button>
+        {(currentUserId === post.userId || canModerate) && (
+          <button onClick={async () => { await bg(`${SERVER}/posts/${post.id}`, { method: "DELETE" }); onDelete(post.id); }} className="text-muted-foreground hover:text-destructive p-1"><Trash2 size={13} /></button>
         )}
       </div>
       {post.content && <p className="text-sm leading-relaxed whitespace-pre-wrap">{post.content}</p>}
       {post.videoId && <div className="aspect-video rounded-xl overflow-hidden bg-zinc-900"><iframe src={`https://www.youtube.com/embed/${post.videoId}`} title="clip" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen className="w-full h-full" /></div>}
       {post.quotedPost && <QuotedPost post={post.quotedPost} />}
       <div className="flex items-center gap-1 pt-1 border-t border-border">
-        <button onClick={(e) => { e.stopPropagation(); handleLike(); }} disabled={!currentUserId} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${liked ? "text-red-400 bg-red-400/10" : "text-muted-foreground hover:text-red-400 hover:bg-red-400/10"} disabled:cursor-not-allowed`}>
+        <button onClick={handleLike} disabled={!currentUserId} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${liked ? "text-red-400 bg-red-400/10" : "text-muted-foreground hover:text-red-400 hover:bg-red-400/10"} disabled:cursor-not-allowed`}>
           <Heart size={13} className={liked ? "fill-current" : ""} />{post.likeCount > 0 && <span>{post.likeCount}</span>}
         </button>
-        <button onClick={(e) => { e.stopPropagation(); onReply(post); }} disabled={!currentUserId} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors disabled:cursor-not-allowed">
+        <button onClick={() => onReply(post)} disabled={!currentUserId} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors disabled:cursor-not-allowed">
           <MessageCircle size={13} />{post.replyCount > 0 && <span>{post.replyCount}</span>}
         </button>
-        <button onClick={(e) => { e.stopPropagation(); handleRepost(); }} disabled={!currentUserId} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors ${reposted ? "text-green-400 bg-green-400/10" : "text-muted-foreground hover:text-green-400 hover:bg-green-400/10"} disabled:cursor-not-allowed`}>
+        <button onClick={handleRepost} disabled={!currentUserId} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors ${reposted ? "text-green-400 bg-green-400/10" : "text-muted-foreground hover:text-green-400 hover:bg-green-400/10"} disabled:cursor-not-allowed`}>
           <Repeat2 size={13} />{post.repostCount > 0 && <span>{post.repostCount}</span>}
         </button>
-        <button onClick={(e) => { e.stopPropagation(); onQuote(post); }} disabled={!currentUserId} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors disabled:cursor-not-allowed">
+        <button onClick={() => onQuote(post)} disabled={!currentUserId} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors disabled:cursor-not-allowed">
           <Quote size={13} />
         </button>
         {post.replyCount > 0 && !isReply && (
-          <button onClick={(e) => { e.stopPropagation(); handleShowReplies(); }} className="ml-auto text-xs text-muted-foreground hover:text-primary">
+          <button onClick={handleShowReplies} className="ml-auto text-xs text-muted-foreground hover:text-primary">
             {loadingReplies ? "Loading…" : showReplies ? "Hide" : `${post.replyCount} repl${post.replyCount === 1 ? "y" : "ies"}`}
           </button>
         )}
       </div>
       {showReplies && replies.length > 0 && (
         <div className="space-y-3 pt-1">
-          {replies.map(r => <PostCard key={r.id} post={r} currentUserId={currentUserId} onReply={onReply} onQuote={onQuote}
+          {replies.map(r => <PostCard key={r.id} post={r} currentUserId={currentUserId} currentUserName={currentUserName} canModerate={canModerate} onReply={onReply} onQuote={onQuote}
             onUpdate={u => setReplies(prev => prev.map(p => p.id === u.id ? u : p))}
-            onDelete={id => setReplies(prev => prev.filter(p => p.id !== id))} onOpen={onOpen} isReply />)}
+            onDelete={id => setReplies(prev => prev.filter(p => p.id !== id))} isReply />)}
         </div>
       )}
     </div>
@@ -525,21 +305,18 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
   onPost: (p: PostData) => void; onCancel?: () => void;
 }) {
   const [content, setContent] = useState(""), [videoUrl, setVideoUrl] = useState(""), [showVideo, setShowVideo] = useState(false), [posting, setPosting] = useState(false);
-  const [error, setError] = useState("");
   const videoId = extractYTId(videoUrl);
   const canPost = content.trim().length > 0 || !!videoId;
 
   async function submit() {
     if (!canPost || posting) return;
-    setPosting(true); setError("");
+    setPosting(true);
     const res = await apiPost("/posts", { userId: profile.userId, content: content.trim(), videoUrl: videoId ? videoUrl : null, replyTo: replyTo?.id ?? null, quotedPostId: quotedPost?.id ?? null });
     if (res?.post) {
+      res.post.profile = { firstName: profile.firstName, lastName: profile.lastName, position: profile.position, avatarUrl: profile.avatarUrl, role: profile.role };
       onPost(res.post);
-      setContent(""); setVideoUrl(""); setShowVideo(false);
-    } else {
-      setError("Post did not save. Make sure the Supabase SQL setup has been run.");
     }
-    setPosting(false);
+    setContent(""); setVideoUrl(""); setShowVideo(false); setPosting(false);
   }
 
   return (
@@ -550,7 +327,7 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
         </p>
       )}
       <div className="flex gap-3">
-        <Avatar p={{ firstName: profile.firstName, lastName: profile.lastName, position: profile.position }} size={9} />
+        <Avatar p={{ firstName: profile.firstName, lastName: profile.lastName, position: profile.position, avatarUrl: profile.avatarUrl, role: profile.role }} size={9} />
         <textarea autoFocus value={content} onChange={e => setContent(e.target.value)} placeholder={placeholder} rows={3}
           className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground resize-none outline-none" />
       </div>
@@ -563,7 +340,6 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
         </div>
       )}
       {quotedPost && <QuotedPost post={quotedPost} />}
-      {error && <p className="text-xs text-amber-400 bg-amber-400/10 border border-amber-400/20 rounded-lg px-3 py-2">{error}</p>}
       <div className="flex items-center justify-between pt-1 border-t border-border">
         <button onClick={() => setShowVideo(v => !v)} className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-colors ${showVideo ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-primary hover:bg-primary/10"}`}>
           <Video size={13} /> Video
@@ -580,102 +356,22 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
 }
 
 // ─── Feed Tab ─────────────────────────────────────────────────────────────────
-function PostDetailView({ post: initialPost, currentUserId, currentProfile, onBack, onChanged, onDeleted }: {
-  post: PostData; currentUserId?: string; currentProfile?: UserProfile | null;
-  onBack: () => void; onChanged?: (p: PostData) => void; onDeleted?: (id: string) => void;
-}) {
-  const [post, setPost] = useState(initialPost);
-  const [replies, setReplies] = useState<PostData[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [replying, setReplying] = useState(false);
-  const currentUserName = currentProfile ? `${currentProfile.firstName} ${currentProfile.lastName}`.trim() : undefined;
-
-  useEffect(() => {
-    setPost(initialPost);
-    setLoading(true);
-    Promise.all([
-      fetchPost(initialPost.id),
-      apiFetch<{ replies: PostData[] }>(`/posts/${initialPost.id}/replies`, { replies: [] }),
-    ]).then(([freshPost, replyData]) => {
-      if (freshPost) setPost(freshPost);
-      setReplies(replyData.replies ?? []);
-      setLoading(false);
-    });
-  }, [initialPost.id]);
-
-  const updatePost = (updated: PostData) => {
-    setPost(updated);
-    onChanged?.(updated);
-  };
-
-  return (
-    <div className="space-y-4">
-      <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-primary">
-        <ChevronLeft size={16} /> Back
-      </button>
-      <PostCard post={post} currentUserId={currentUserId} currentUserName={currentUserName}
-        onReply={() => setReplying(true)} onQuote={() => {}}
-        onUpdate={updatePost} onDelete={(id) => { onDeleted?.(id); onBack(); }} />
-      {currentProfile && (replying || replies.length === 0) && (
-        <ComposeBox profile={currentProfile} placeholder={`Reply to ${post.profile?.firstName || "this post"}...`} replyTo={post}
-          onPost={(reply) => { setReplies(prev => [...prev, reply]); updatePost({ ...post, replyCount: post.replyCount + 1 }); setReplying(false); }}
-          onCancel={replies.length > 0 ? () => setReplying(false) : undefined} />
-      )}
-      <div className="bg-card border border-border rounded-2xl p-4">
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-xs uppercase tracking-wider text-muted-foreground">Replies</p>
-          {currentProfile && replies.length > 0 && !replying && <button onClick={() => setReplying(true)} className="text-xs font-semibold text-primary hover:text-accent">Reply</button>}
-        </div>
-        {loading ? <p className="text-sm text-muted-foreground py-6 text-center">Loading replies...</p>
-          : replies.length === 0 ? <p className="text-sm text-muted-foreground py-6 text-center">No replies yet.</p>
-          : <div className="space-y-3">{replies.map(reply => (
-            <PostCard key={reply.id} post={reply} currentUserId={currentUserId} currentUserName={currentUserName}
-              onReply={() => setReplying(true)} onQuote={() => {}}
-              onUpdate={updated => setReplies(prev => prev.map(p => p.id === updated.id ? updated : p))}
-              onDelete={id => setReplies(prev => prev.filter(p => p.id !== id))} isReply />
-          ))}</div>}
-      </div>
-    </div>
-  );
-}
-
 function FeedTab({ currentUserId, currentProfile }: { currentUserId?: string; currentProfile?: UserProfile | null }) {
   const [posts, setPosts] = useState<PostData[]>([]);
   const [loading, setLoading] = useState(true);
   const [replyTarget, setReplyTarget] = useState<PostData | null>(null);
   const [quoteTarget, setQuoteTarget] = useState<PostData | null>(null);
-  const [selectedPost, setSelectedPost] = useState<PostData | null>(null);
-  const [sort, setSort] = useState<"top" | "newest">("top");
   const currentUserName = currentProfile ? `${currentProfile.firstName} ${currentProfile.lastName}`.trim() : undefined;
+  const canModerate = isAdmin(currentProfile);
 
   useEffect(() => {
-    setLoading(true);
-    apiFetch<{ posts: PostData[] }>(`/posts?sort=${sort}`, { posts: [] }).then(d => { setPosts(d.posts ?? []); setLoading(false); });
-  }, [sort]);
+    apiFetch<{ posts: PostData[] }>("/posts", { posts: [] }).then(d => { setPosts(d.posts ?? []); setLoading(false); });
+  }, []);
 
   const addPost = (p: PostData) => setPosts(prev => [p, ...prev]);
 
-  if (selectedPost) {
-    return (
-      <PostDetailView
-        post={selectedPost}
-        currentUserId={currentUserId}
-        currentProfile={currentProfile}
-        onBack={() => setSelectedPost(null)}
-        onChanged={updated => setPosts(prev => prev.map(p => p.id === updated.id ? updated : p))}
-        onDeleted={id => setPosts(prev => prev.filter(p => p.id !== id))}
-      />
-    );
-  }
-
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs uppercase tracking-wider text-muted-foreground">{sort === "top" ? "Ranked by likes, replies, and recency" : "Newest posts first"}</p>
-        <div className="flex gap-1 bg-card border border-border rounded-xl p-1">
-          {(["top", "newest"] as const).map(s => <button key={s} onClick={() => setSort(s)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize ${sort === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>{s}</button>)}
-        </div>
-      </div>
       {currentProfile && !replyTarget && !quoteTarget && <ComposeBox profile={currentProfile} onPost={addPost} />}
       {replyTarget && currentProfile && <ComposeBox profile={currentProfile} placeholder={`Reply to ${replyTarget.profile?.firstName}…`} replyTo={replyTarget} onPost={p => { addPost(p); setReplyTarget(null); }} onCancel={() => setReplyTarget(null)} />}
       {quoteTarget && currentProfile && <ComposeBox profile={currentProfile} placeholder="Add your thoughts…" quotedPost={quoteTarget} onPost={p => { addPost(p); setQuoteTarget(null); }} onCancel={() => setQuoteTarget(null)} />}
@@ -683,12 +379,11 @@ function FeedTab({ currentUserId, currentProfile }: { currentUserId?: string; cu
       {loading ? <div className="text-center py-12 text-muted-foreground text-sm">Loading feed…</div>
         : posts.length === 0 ? <div className="text-center py-12 text-muted-foreground"><MessageCircle size={40} className="mx-auto mb-3 opacity-20" /><p className="text-sm">No posts yet. Be the first!</p></div>
         : <div className="space-y-3">{posts.map(post => (
-          <PostCard key={post.id} post={post} currentUserId={currentUserId} currentUserName={currentUserName}
+          <PostCard key={post.id} post={post} currentUserId={currentUserId} currentUserName={currentUserName} canModerate={canModerate}
             onReply={p => { setQuoteTarget(null); setReplyTarget(p); }}
             onQuote={p => { setReplyTarget(null); setQuoteTarget(p); }}
             onUpdate={u => setPosts(prev => prev.map(p => p.id === u.id ? u : p))}
-            onDelete={id => setPosts(prev => prev.filter(p => p.id !== id))}
-            onOpen={setSelectedPost} />
+            onDelete={id => setPosts(prev => prev.filter(p => p.id !== id))} />
         ))}</div>}
     </div>
   );
@@ -719,7 +414,7 @@ function PlayersTab({ onSelect }: { onSelect: (p: CommunityPlayer) => void }) {
           <div key={player.userId} onClick={() => onSelect(player)} className="bg-card border border-border rounded-2xl overflow-hidden hover:border-primary/50 transition-all group cursor-pointer">
             <div className="bg-gradient-to-br from-primary/20 to-primary/5 px-5 pt-5 pb-4">
               <div className="flex items-start justify-between">
-                <div className="w-12 h-12 rounded-xl bg-primary/20 flex items-center justify-center text-lg font-black text-primary" style={{ fontFamily: "'Roboto Slab',serif" }}>{player.profile.firstName[0]}{player.profile.lastName[0]}</div>
+                <Avatar p={player.profile} size={12} />
                 <div className="flex gap-1.5"><span className="bg-primary/20 text-primary text-xs font-semibold px-2 py-1 rounded-lg">{player.profile.position}</span><span className="bg-card text-muted-foreground text-xs px-2 py-1 rounded-lg">{player.profile.gradYear}</span></div>
               </div>
               <div className="mt-3"><h3 className="font-black text-base" style={{ fontFamily: "'Roboto Slab',serif" }}>{player.profile.firstName} {player.profile.lastName}</h3>{player.profile.height && <p className="text-xs text-muted-foreground mt-0.5">{player.profile.height}{player.profile.weight ? ` · ${player.profile.weight} lbs` : ""}</p>}</div>
@@ -741,7 +436,7 @@ function PlayersTab({ onSelect }: { onSelect: (p: CommunityPlayer) => void }) {
 
 // ─── Community Page ───────────────────────────────────────────────────────────
 // ─── Teams Tab ────────────────────────────────────────────────────────────────
-function TeamsTab({ currentUserId }: { currentUserId?: string }) {
+function TeamsTab({ currentUserId, currentProfile }: { currentUserId?: string; currentProfile?: UserProfile | null }) {
   const [teams, setTeams] = useState<Team[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -753,6 +448,7 @@ function TeamsTab({ currentUserId }: { currentUserId?: string }) {
   useEffect(() => { fetchTeams().then(t => { setTeams(t); setLoading(false); }); }, []);
 
   const filtered = teams.filter(t => levelFilter === "All" || t.level === levelFilter);
+  const canModerate = isAdmin(currentProfile);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -851,7 +547,7 @@ function TeamsTab({ currentUserId }: { currentUserId?: string }) {
                       <div className="flex items-center gap-2 flex-shrink-0">
                         {currentUserId && !isMember && <button onClick={() => handleJoin(team.id)} className="bg-primary text-primary-foreground text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-accent">Join</button>}
                         {currentUserId && isMember && !isCreator && <button onClick={() => handleLeave(team.id)} className="bg-secondary text-muted-foreground text-xs font-semibold px-3 py-1.5 rounded-lg hover:text-foreground">Leave</button>}
-                        {isCreator && <button onClick={() => handleDelete(team.id)} className="text-muted-foreground hover:text-destructive p-1"><Trash2 size={14} /></button>}
+                        {(isCreator || canModerate) && <button onClick={() => handleDelete(team.id)} className="text-muted-foreground hover:text-destructive p-1"><Trash2 size={14} /></button>}
                         <button onClick={() => setExpanded(isExpanded ? null : team.id)} className="text-xs text-muted-foreground hover:text-primary">{isExpanded ? "Hide" : "Roster"}</button>
                       </div>
                     </div>
@@ -966,10 +662,7 @@ function CommunityPage({ currentUserId, currentProfile, onBack }: { currentUserI
   const [selected, setSelected] = useState<CommunityPlayer | null>(null);
 
   const currentUserName = currentProfile ? `${currentProfile.firstName} ${currentProfile.lastName}`.trim() : undefined;
-  const myPlayer: CommunityPlayer | null = currentUserId && currentProfile
-    ? { userId: currentUserId, profile: currentProfile, summary: { streak: 0, shootingPct: 0, totalMinutes: 0, activeDays: 0 } }
-    : null;
-  if (selected) return <PlayerProfileView player={selected} onBack={() => setSelected(null)} currentUserId={currentUserId} currentUserName={currentUserName} currentProfile={currentProfile} />;
+  if (selected) return <PlayerProfileView player={selected} onBack={() => setSelected(null)} currentUserId={currentUserId} currentUserName={currentUserName} />;
 
   return (
     <div className="min-h-screen bg-background" style={{ fontFamily: "'DM Sans',sans-serif" }}>
@@ -979,42 +672,30 @@ function CommunityPage({ currentUserId, currentProfile, onBack }: { currentUserI
         <div><h1 className="text-xl font-black tracking-tight leading-none" style={{ fontFamily: "'Roboto Slab',serif" }}>COMMUNITY</h1><p className="text-xs text-muted-foreground uppercase tracking-widest">Players · Teams · Coaches · Scouts</p></div>
       </header>
       <main className="max-w-5xl mx-auto px-6 py-6 space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <div className="flex gap-1 bg-card border border-border rounded-xl p-1 w-fit">
-            {(["feed", "players", "teams"] as const).map(t => <button key={t} onClick={() => setTab(t)} className={`px-5 py-2 rounded-lg text-sm font-semibold transition-colors capitalize ${tab === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>{t}</button>)}
-          </div>
-          {myPlayer && (
-            <button onClick={() => setSelected(myPlayer)} className="w-fit flex items-center gap-2 bg-secondary text-secondary-foreground border border-border rounded-xl px-4 py-2 text-sm font-semibold hover:border-primary hover:text-primary transition-colors">
-              <Users size={14} /> My Profile
-            </button>
-          )}
+        <div className="flex gap-1 bg-card border border-border rounded-xl p-1 w-fit">
+          {(["feed", "players", "teams"] as const).map(t => <button key={t} onClick={() => setTab(t)} className={`px-5 py-2 rounded-lg text-sm font-semibold transition-colors capitalize ${tab === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>{t}</button>)}
         </div>
         {tab === "feed"    && <FeedTab currentUserId={currentUserId} currentProfile={currentProfile} />}
         {tab === "players" && <PlayersTab onSelect={setSelected} />}
-        {tab === "teams"   && <TeamsTab currentUserId={currentUserId} />}
+        {tab === "teams"   && <TeamsTab currentUserId={currentUserId} currentProfile={currentProfile} />}
       </main>
     </div>
   );
 }
 
 // ─── Player Profile View ──────────────────────────────────────────────────────
-function PlayerProfileView({ player, onBack, currentUserId, currentUserName, currentProfile }: { player: CommunityPlayer; onBack?: () => void; currentUserId?: string; currentUserName?: string; currentProfile?: UserProfile | null; }) {
+function PlayerProfileView({ player, onBack, currentUserId, currentUserName }: { player: CommunityPlayer; onBack?: () => void; currentUserId?: string; currentUserName?: string; }) {
   const [gameData, setGameData] = useState<AppData | null>(null);
   const [copied, setCopied] = useState(false);
-  const [posts, setPosts] = useState<PostData[]>([]);
-  const [postsLoading, setPostsLoading] = useState(true);
-  const [selectedPost, setSelectedPost] = useState<PostData | null>(null);
 
   useEffect(() => {
     apiFetch<{ data: AppData | null }>(`/gamedata/${player.userId}`, { data: null }).then(d => { if (d.data) setGameData(d.data); });
-    setPostsLoading(true);
-    fetchUserPosts(player.userId).then(p => { setPosts(p); setPostsLoading(false); });
   }, [player.userId]);
 
   function copyLink() {
     const url = new URL(window.location.href);
     url.searchParams.set("player", player.userId); url.searchParams.delete("view");
-    navigator.clipboard.writeText(url.toString()).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+    navigator.clipboard.writeText(url.toString()).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }).catch(() => window.prompt("Copy this profile link:", url.toString()));
   }
 
   const shots = gameData?.shots || [], sessions = gameData?.sessions || [];
@@ -1022,23 +703,6 @@ function PlayerProfileView({ player, onBack, currentUserId, currentUserName, cur
   const graphData = sessions.slice(-7).map(s => ({ date: shortDate(s.date), minutes: s.minutes }));
   const shotGraph = shots.map((s, i) => ({ session: `S${i + 1}`, pct: s.attempted > 0 ? Math.round((s.made / s.attempted) * 100) : 0 }));
   const p = player.profile, sum = player.summary;
-
-  if (selectedPost) {
-    return (
-      <div className="min-h-screen bg-background" style={{ fontFamily: "'DM Sans',sans-serif" }}>
-        <main className="max-w-3xl mx-auto px-6 py-8">
-          <PostDetailView
-            post={selectedPost}
-            currentUserId={currentUserId}
-            currentProfile={currentProfile}
-            onBack={() => setSelectedPost(null)}
-            onChanged={updated => setPosts(prev => prev.map(post => post.id === updated.id ? updated : post))}
-            onDeleted={id => { setPosts(prev => prev.filter(post => post.id !== id)); setSelectedPost(null); }}
-          />
-        </main>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-background" style={{ fontFamily: "'DM Sans',sans-serif" }}>
@@ -1058,7 +722,7 @@ function PlayerProfileView({ player, onBack, currentUserId, currentUserName, cur
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
         <div className="bg-card border border-border rounded-2xl overflow-hidden">
           <div className="bg-gradient-to-r from-primary/20 via-primary/10 to-transparent px-6 py-6 flex items-center gap-5">
-            <div className="w-16 h-16 rounded-2xl bg-primary/20 flex items-center justify-center text-2xl font-black text-primary flex-shrink-0" style={{ fontFamily: "'Roboto Slab',serif" }}>{p.firstName[0]}{p.lastName[0]}</div>
+            <Avatar p={p} size={16} />
             <div className="flex-1">
               <h2 className="text-2xl font-black leading-none" style={{ fontFamily: "'Roboto Slab',serif" }}>{p.firstName} {p.lastName}</h2>
               <div className="flex flex-wrap gap-2 mt-2">
@@ -1097,8 +761,8 @@ function PlayerProfileView({ player, onBack, currentUserId, currentUserName, cur
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
               <XAxis dataKey="date" tick={{ fill: "#8a8680", fontSize: 11 }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fill: "#8a8680", fontSize: 11 }} axisLine={false} tickLine={false} unit=" m" />
-              <Tooltip content={<ChartTip unit=" min" />} cursor={{ fill: "rgba(249,115,22,0.07)" }} />
-              <Bar name="pub-min" dataKey="minutes" fill="#f97316" radius={[6, 6, 0, 0]} />
+              <Tooltip content={<ChartTip unit=" min" />} cursor={{ fill: "rgba(20,184,166,0.07)" }} />
+              <Bar name="pub-min" dataKey="minutes" fill="#14b8a6" radius={[6, 6, 0, 0]} />
             </BarChart></ResponsiveContainer></div>
           </div>
         )}
@@ -1109,28 +773,12 @@ function PlayerProfileView({ player, onBack, currentUserId, currentUserName, cur
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
               <XAxis dataKey="session" tick={{ fill: "#8a8680", fontSize: 11 }} axisLine={false} tickLine={false} />
               <YAxis domain={[0, 100]} tick={{ fill: "#8a8680", fontSize: 11 }} axisLine={false} tickLine={false} unit="%" />
-              <ReferenceLine y={pct} stroke="rgba(249,115,22,0.3)" strokeDasharray="4 4" />
-              <Tooltip content={<ChartTip unit="%" />} cursor={{ stroke: "rgba(249,115,22,0.2)", strokeWidth: 1 }} />
-              <Line name="pub-pct" type="monotone" dataKey="pct" stroke="#f97316" strokeWidth={2.5} dot={{ fill: "#f97316", r: 4, strokeWidth: 0 }} activeDot={{ r: 6, fill: "#f97316" }} />
+              <ReferenceLine y={pct} stroke="rgba(20,184,166,0.3)" strokeDasharray="4 4" />
+              <Tooltip content={<ChartTip unit="%" />} cursor={{ stroke: "rgba(20,184,166,0.2)", strokeWidth: 1 }} />
+              <Line name="pub-pct" type="monotone" dataKey="pct" stroke="#14b8a6" strokeWidth={2.5} dot={{ fill: "#14b8a6", r: 4, strokeWidth: 0 }} activeDot={{ r: 6, fill: "#14b8a6" }} />
             </LineChart></ResponsiveContainer></div>
           </div>
         )}
-        <div className="bg-card border border-border rounded-2xl p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2"><MessageCircle size={14} className="text-primary" /><span className="text-xs uppercase tracking-wider text-muted-foreground">Posts</span></div>
-            <span className="text-xs text-muted-foreground">Newest first</span>
-          </div>
-          {postsLoading ? <p className="text-sm text-muted-foreground text-center py-8">Loading posts...</p>
-            : posts.length === 0 ? <p className="text-sm text-muted-foreground text-center py-8">No posts yet.</p>
-            : <div className="space-y-3">{posts.map(post => (
-              <PostCard key={post.id} post={post} currentUserId={currentUserId} currentUserName={currentUserName}
-                onReply={() => setSelectedPost(post)}
-                onQuote={() => setSelectedPost(post)}
-                onUpdate={updated => setPosts(prev => prev.map(p => p.id === updated.id ? updated : p))}
-                onDelete={id => setPosts(prev => prev.filter(p => p.id !== id))}
-                onOpen={setSelectedPost} />
-            ))}</div>}
-        </div>
       </main>
     </div>
   );
@@ -1248,28 +896,18 @@ function LoginScreen() {
 
 // ─── Profile Setup ────────────────────────────────────────────────────────────
 function ProfileSetup({ userId, email, onComplete }: { userId: string; email: string; onComplete: (p: UserProfile) => void }) {
-  const [form, setForm] = useState({ username: "", displayName: "", avatarUrl: "", firstName: "", lastName: "", position: "PG", gradYear: String(new Date().getFullYear() + 1), height: "", weight: "", wingspan: "", vertical: "", bio: "", strengths: "", weaknesses: "", isPublic: true });
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState("");
+  const [form, setForm] = useState({ firstName: "", lastName: "", avatarUrl: "", position: "PG", gradYear: String(new Date().getFullYear() + 1), height: "", weight: "", wingspan: "", vertical: "", bio: "", strengths: "", weaknesses: "", isPublic: true });
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
   const cls = "bg-secondary border border-border rounded-xl px-4 py-2.5 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary w-full";
   const lbl = "text-xs text-muted-foreground uppercase tracking-wider mb-1 block";
 
-  async function submit(e: React.FormEvent) {
+  function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.firstName.trim() || !form.lastName.trim() || saving) return;
-    setSaving(true);
-    setSaveError("");
-    const profile: UserProfile = { userId, email, ...form, username: slugify(form.username || form.displayName || `${form.firstName}${form.lastName}`), displayName: form.displayName || `${form.firstName} ${form.lastName}`.trim() };
+    if (!form.firstName.trim() || !form.lastName.trim()) return;
+    const profile: UserProfile = withRole({ userId, email, ...form, firstName: sanitizeText(form.firstName), lastName: sanitizeText(form.lastName), avatarUrl: sanitizeImageUrl(form.avatarUrl) });
     saveLocalProfile(profile);
-    const saved = await apiPost("/profile", { userId, ...profile });
-    if (!saved?.ok) {
-      setSaveError("Could not save to Supabase. Run the community_schema.sql setup in Supabase, then try again.");
-      setSaving(false);
-      return;
-    }
-    setSaving(false);
-    onComplete(saved.profile || profile);
+    bgPost(userId, profile);
+    onComplete(profile);
   }
 
   return (
@@ -1278,14 +916,10 @@ function ProfileSetup({ userId, email, onComplete }: { userId: string; email: st
         <div className="text-center mb-8"><span className="text-4xl">🏀</span><h1 className="text-2xl font-black mt-3" style={{ fontFamily: "'Roboto Slab',serif" }}>Set Up Your Profile</h1><p className="text-muted-foreground text-sm mt-1">Coaches and scouts can discover you on the community board.</p></div>
         <form onSubmit={submit} className="bg-card border border-border rounded-2xl p-6 flex flex-col gap-5">
           <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl}>Username *</label><input value={form.username} onChange={e => set("username", e.target.value)} placeholder="rowanhoops" className={cls} /></div>
-            <div><label className={lbl}>Display Name</label><input value={form.displayName} onChange={e => set("displayName", e.target.value)} placeholder="Rowan Kemp" className={cls} /></div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
             <div><label className={lbl}>First Name *</label><input autoFocus value={form.firstName} onChange={e => set("firstName", e.target.value)} placeholder="First name" className={cls} required /></div>
             <div><label className={lbl}>Last Name *</label><input value={form.lastName} onChange={e => set("lastName", e.target.value)} placeholder="Last name" className={cls} required /></div>
           </div>
-          <div><label className={lbl}>Profile Image URL (optional)</label><input value={form.avatarUrl} onChange={e => set("avatarUrl", e.target.value)} placeholder="https://..." className={cls} /></div>
+          <div><label className={lbl}>Profile Image URL (optional)</label><input value={form.avatarUrl} onChange={e => set("avatarUrl", e.target.value)} placeholder="https://..." className={cls} />{form.avatarUrl && !sanitizeImageUrl(form.avatarUrl) && <p className="text-xs text-destructive mt-1">Use a valid https image link.</p>}</div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className={lbl}>Position</label><select value={form.position} onChange={e => set("position", e.target.value)} className={cls}>{POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}</select></div>
             <div><label className={lbl}>Grad Year</label><input value={form.gradYear} onChange={e => set("gradYear", e.target.value)} placeholder="2026" className={cls} /></div>
@@ -1309,8 +943,7 @@ function ProfileSetup({ userId, email, onComplete }: { userId: string; email: st
             </div>
             <div><p className="text-sm font-medium">Visible on Community Board</p><p className="text-xs text-muted-foreground">Coaches and scouts can see your profile</p></div>
           </label>
-          {saveError && <p className="text-xs rounded-xl p-3 leading-relaxed text-amber-400 bg-amber-400/10">{saveError}</p>}
-          <button type="submit" disabled={saving || !form.firstName.trim() || !form.lastName.trim()} className="bg-primary text-primary-foreground font-semibold py-3 rounded-xl hover:bg-accent disabled:opacity-40">
+          <button type="submit" disabled={!form.firstName.trim() || !form.lastName.trim()} className="bg-primary text-primary-foreground font-semibold py-3 rounded-xl hover:bg-accent disabled:opacity-40">
             Let&apos;s Go 🏀
           </button>
         </form>
@@ -1345,18 +978,18 @@ function TrainingView({ data }: { data: AppData }) {
     return { month: lbl, pct: att > 0 ? Math.round((made / att) * 100) : null };
   });
   const avgPct = shootingPct(data.shots);
-  const heatBg = ["#1e1e20","rgba(249,115,22,0.2)","rgba(249,115,22,0.4)","rgba(249,115,22,0.7)","#f97316"];
+  const heatBg = ["#1e1e20","rgba(20,184,166,0.2)","rgba(20,184,166,0.4)","rgba(20,184,166,0.7)","#14b8a6"];
   return (
     <div className="space-y-6">
-      <ViewHero img="1519861531473-9200262188bf" title="Training" sub="Long-term progress" />
+      <ViewHero img="1606048033063-fe28cdad4f35" title="Training" sub="Long-term progress" />
       <div className="bg-card border border-border rounded-2xl p-6">
         <div className="flex items-center gap-2 mb-5"><Clock size={14} className="text-primary" /><span className="text-xs uppercase tracking-wider text-muted-foreground">Weekly Volume (last 8 weeks)</span></div>
         <div className="h-52"><ResponsiveContainer width="100%" height="100%"><BarChart id="t-weekly" data={weeklyData} barSize={28} margin={{ top:4,right:4,bottom:0,left:-20 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
           <XAxis dataKey="week" tick={{ fill:"#8a8680",fontSize:11 }} axisLine={false} tickLine={false} />
           <YAxis tick={{ fill:"#8a8680",fontSize:11 }} axisLine={false} tickLine={false} unit=" m" />
-          <Tooltip content={<ChartTip unit=" min" />} cursor={{ fill:"rgba(249,115,22,0.07)" }} />
-          <Bar name="weekly-min" dataKey="minutes" fill="#f97316" radius={[6,6,0,0]} />
+          <Tooltip content={<ChartTip unit=" min" />} cursor={{ fill:"rgba(20,184,166,0.07)" }} />
+          <Bar name="weekly-min" dataKey="minutes" fill="#14b8a6" radius={[6,6,0,0]} />
         </BarChart></ResponsiveContainer></div>
       </div>
       <div className="bg-card border border-border rounded-2xl p-6">
@@ -1365,9 +998,9 @@ function TrainingView({ data }: { data: AppData }) {
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
           <XAxis dataKey="month" tick={{ fill:"#8a8680",fontSize:11 }} axisLine={false} tickLine={false} />
           <YAxis domain={[0,100]} tick={{ fill:"#8a8680",fontSize:11 }} axisLine={false} tickLine={false} unit="%" />
-          <ReferenceLine y={avgPct} stroke="rgba(249,115,22,0.3)" strokeDasharray="4 4" />
-          <Tooltip content={<ChartTip unit="%" />} cursor={{ stroke:"rgba(249,115,22,0.2)",strokeWidth:1 }} />
-          <Line name="monthly-pct" type="monotone" dataKey="pct" stroke="#f97316" strokeWidth={2.5} connectNulls dot={{ fill:"#f97316",r:4,strokeWidth:0 }} activeDot={{ r:6,fill:"#f97316" }} />
+          <ReferenceLine y={avgPct} stroke="rgba(20,184,166,0.3)" strokeDasharray="4 4" />
+          <Tooltip content={<ChartTip unit="%" />} cursor={{ stroke:"rgba(20,184,166,0.2)",strokeWidth:1 }} />
+          <Line name="monthly-pct" type="monotone" dataKey="pct" stroke="#14b8a6" strokeWidth={2.5} connectNulls dot={{ fill:"#14b8a6",r:4,strokeWidth:0 }} activeDot={{ r:6,fill:"#14b8a6" }} />
         </LineChart></ResponsiveContainer></div>
         <p className="text-xs text-muted-foreground mt-3">Dashed = all-time avg ({avgPct}%)</p>
       </div>
@@ -1391,14 +1024,14 @@ function StrengthView({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData
   const last = ex.history.length?ex.history[ex.history.length-1].weight:null;
   return (
     <div className="space-y-6">
-      <ViewHero img="1581009146145-b5ef050c2e1e" title="Strength" sub="Track your lifts" />
+      <ViewHero img="1534438327776-3db31fd82e9a" title="Strength" sub="Track your lifts" />
       <div className="flex flex-wrap gap-2">
         {data.strength.map((e,i)=><button key={i} onClick={()=>{setSel(i);setAdding(false);}} className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${i===sel?"bg-primary text-primary-foreground":"bg-secondary text-secondary-foreground hover:bg-muted"}`}>{e.name}</button>)}
         {addEx?(<div className="flex items-center gap-2"><input autoFocus value={exName} onChange={e=>setExName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveEx()} placeholder="Exercise name" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none w-36" /><button onClick={saveEx} className="bg-primary text-primary-foreground rounded-xl p-2"><Check size={14}/></button><button onClick={()=>{setAddEx(false);setExName("");}} className="bg-secondary rounded-xl p-2"><X size={14}/></button></div>)
         :<button onClick={()=>setAddEx(true)} className="px-4 py-2 rounded-xl text-sm bg-secondary text-muted-foreground hover:text-foreground flex items-center gap-1.5"><Plus size={13}/> Add lift</button>}
       </div>
       <div className="grid grid-cols-3 gap-4">{[{l:"Best",v:best?`${best} ${ex.unit}`:"—"},{l:"Last",v:last!==null?`${last} ${ex.unit}`:"—"},{l:"Sessions",v:String(ex.history.length)}].map(s=>(<div key={s.l} className="bg-card border border-border rounded-2xl p-4"><p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">{s.l}</p><p className="text-2xl font-black text-primary" style={{fontFamily:"'Roboto Slab',serif"}}>{s.v}</p></div>))}</div>
-      {graphData.length>=2?(<div className="bg-card border border-border rounded-2xl p-6"><div className="flex items-center gap-2 mb-5"><TrendingUp size={14} className="text-primary"/><span className="text-xs uppercase tracking-wider text-muted-foreground">{ex.name} — Weight Over Time</span></div><div className="h-48"><ResponsiveContainer width="100%" height="100%"><LineChart id="s-strength" data={graphData} margin={{top:4,right:4,bottom:0,left:-10}}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false}/><XAxis dataKey="date" tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false}/><YAxis tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false} unit={` ${ex.unit}`}/><Tooltip content={<ChartTip unit={` ${ex.unit}`}/>} cursor={{stroke:"rgba(249,115,22,0.2)",strokeWidth:1}}/><Line name="strength-weight" type="monotone" dataKey="weight" stroke="#f97316" strokeWidth={2.5} dot={{fill:"#f97316",r:4,strokeWidth:0}} activeDot={{r:6,fill:"#f97316"}}/></LineChart></ResponsiveContainer></div></div>)
+      {graphData.length>=2?(<div className="bg-card border border-border rounded-2xl p-6"><div className="flex items-center gap-2 mb-5"><TrendingUp size={14} className="text-primary"/><span className="text-xs uppercase tracking-wider text-muted-foreground">{ex.name} — Weight Over Time</span></div><div className="h-48"><ResponsiveContainer width="100%" height="100%"><LineChart id="s-strength" data={graphData} margin={{top:4,right:4,bottom:0,left:-10}}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false}/><XAxis dataKey="date" tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false}/><YAxis tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false} unit={` ${ex.unit}`}/><Tooltip content={<ChartTip unit={` ${ex.unit}`}/>} cursor={{stroke:"rgba(20,184,166,0.2)",strokeWidth:1}}/><Line name="strength-weight" type="monotone" dataKey="weight" stroke="#14b8a6" strokeWidth={2.5} dot={{fill:"#14b8a6",r:4,strokeWidth:0}} activeDot={{r:6,fill:"#14b8a6"}}/></LineChart></ResponsiveContainer></div></div>)
       :<div className="bg-card border border-border rounded-2xl p-8 text-center text-muted-foreground text-sm">Log at least 2 sessions to see your chart.</div>}
       <div className="bg-card border border-border rounded-2xl p-6">
         <div className="flex items-center justify-between mb-4"><span className="text-xs uppercase tracking-wider text-muted-foreground">History</span>{!adding&&<button onClick={()=>setAdding(true)} className="flex items-center gap-1.5 bg-primary text-primary-foreground text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-accent"><Plus size={12}/> Log today</button>}</div>
@@ -1412,11 +1045,17 @@ function StrengthView({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData
 // ─── Editable Measurables ────────────────────────────────────────────────────
 function EditableMeasurables({ profile, onSave }: { profile: UserProfile; onSave: (u: Partial<UserProfile>) => void }) {
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ height: profile.height, weight: profile.weight, wingspan: profile.wingspan, vertical: profile.vertical, position: profile.position, gradYear: profile.gradYear });
+  const [form, setForm] = useState({ firstName: profile.firstName, lastName: profile.lastName, avatarUrl: profile.avatarUrl || "", height: profile.height, weight: profile.weight, wingspan: profile.wingspan, vertical: profile.vertical, position: profile.position, gradYear: profile.gradYear });
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
   const cls = "bg-muted border border-border rounded-xl px-3 py-2 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary w-full";
 
-  function save() { onSave(form); setEditing(false); }
+  function save() {
+    const firstName = sanitizeText(form.firstName);
+    const lastName = sanitizeText(form.lastName);
+    if (!firstName || !lastName) return;
+    onSave({ ...form, firstName, lastName, avatarUrl: sanitizeImageUrl(form.avatarUrl) });
+    setEditing(false);
+  }
 
   if (!editing) {
     const metrics = [
@@ -1430,7 +1069,8 @@ function EditableMeasurables({ profile, onSave }: { profile: UserProfile; onSave
       <div className="bg-card border border-border rounded-2xl px-6 py-4">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground uppercase tracking-wider">Measurables</span>
+            <span className="text-xs text-muted-foreground uppercase tracking-wider">Profile</span>
+            {isAdmin(profile) && <span className="text-xs text-primary bg-primary/10 px-2 py-0.5 rounded-md">Admin</span>}
             <span className="text-xs text-primary bg-primary/10 px-2 py-0.5 rounded-md">{profile.position}</span>
             {profile.gradYear && <span className="text-xs text-muted-foreground bg-secondary px-2 py-0.5 rounded-md">Class of {profile.gradYear}</span>}
           </div>
@@ -1457,6 +1097,19 @@ function EditableMeasurables({ profile, onSave }: { profile: UserProfile; onSave
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">First Name</label>
+          <input value={form.firstName} onChange={e => set("firstName", e.target.value)} placeholder="First name" className={cls} />
+        </div>
+        <div>
+          <label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">Last Name</label>
+          <input value={form.lastName} onChange={e => set("lastName", e.target.value)} placeholder="Last name" className={cls} />
+        </div>
+        <div className="col-span-2">
+          <label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">Profile Image URL</label>
+          <input value={form.avatarUrl} onChange={e => set("avatarUrl", e.target.value)} placeholder="https://..." className={cls} />
+          {form.avatarUrl && !sanitizeImageUrl(form.avatarUrl) && <p className="text-xs text-destructive mt-1">Use a valid https image link.</p>}
+        </div>
         <div>
           <label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">Position</label>
           <select value={form.position} onChange={e => set("position", e.target.value)} className={cls}>
@@ -1498,11 +1151,11 @@ export default function App() {
   const timerStartedAtRef = useRef<number | null>(null);
   const timerBaseSecRef = useRef(0);
   const [shotMade, setShotMade] = useState(0), [shotAtt, setShotAtt] = useState(0), [shotMode, setShotMode] = useState(false);
-  const [shotEntryMode, setShotEntryMode] = useState<"tracker" | "quick">("tracker");
   const [streakPulse, setStreakPulse] = useState(false);
   const [showNotifs, setShowNotifs] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [sharedPlayer, setSharedPlayer] = useState<CommunityPlayer | null>(null);
+  const [shareCopied, setShareCopied] = useState(false);
 
   const urlParams = new URLSearchParams(window.location.search);
   const playerIdParam = urlParams.get("player");
@@ -1510,8 +1163,15 @@ export default function App() {
 
   useEffect(() => {
     if (playerIdParam) {
-      apiFetch<{ profile: UserProfile | null }>(`/profile/${playerIdParam}`, { profile: null })
-        .then(d => { if (d.profile) setSharedPlayer({ userId: playerIdParam, profile: d.profile, summary: { streak:0,shootingPct:0,totalMinutes:0,activeDays:0 } }); });
+      Promise.all([
+        apiFetch<{ profile: UserProfile | null }>(`/profile/${playerIdParam}`, { profile: null }),
+        apiFetch<{ data: AppData | null }>(`/gamedata/${playerIdParam}`, { data: null }),
+      ]).then(([profileRes, dataRes]) => {
+        if (!profileRes.profile) return;
+        const sessions = dataRes.data?.sessions || [], shots = dataRes.data?.shots || [];
+        const made = shots.reduce((a, b) => a + b.made, 0), attempted = shots.reduce((a, b) => a + b.attempted, 0);
+        setSharedPlayer({ userId: playerIdParam, profile: withRole(profileRes.profile), summary: { streak:dataRes.data?.streak || 0, shootingPct:attempted ? Math.round((made / attempted) * 100) : 0, totalMinutes:sessions.reduce((a, b) => a + b.minutes, 0), activeDays:sessions.filter(s => s.minutes > 0).length } });
+      });
     }
   }, [playerIdParam]);
 
@@ -1519,36 +1179,34 @@ export default function App() {
     async function loadUser(uid: string, email: string) {
       setUserId(uid); setUserEmail(email);
       // 1. Try localStorage first (instant)
-      const storedProfile = localProfile(uid) || localProfileByEmail(email);
-      const lp = storedProfile ? { ...storedProfile, userId: uid, email: storedProfile.email || email } : null;
-      const ld = localData(uid) || localDataByEmail(email);
+      const lp = localProfile(uid);
+      const ld = localData(uid);
       if (lp) {
-        saveLocalProfile(lp);
-        setProfile(lp); setData(ld || emptyData()); setAuthState("ready");
+        const local = withRole({ ...lp, email: lp.email || email });
+        setProfile(local); setData(ld || emptyData()); setAuthState("ready");
+        // Check unread notifications
         fetchNotifs(uid).then(n => setUnreadCount(n.filter((x: any) => !x.read).length)).catch(() => {});
       }
       // 2. Fetch from server (new device or cleared cache)
       try {
-        const [profileRes, gameRes] = await Promise.all([
+        const [profileRes, dataRes] = await Promise.all([
           apiFetch<{ profile: UserProfile | null }>(`/profile/${uid}`, { profile: null }),
           apiFetch<{ data: AppData | null }>(`/gamedata/${uid}`, { data: null }),
         ]);
-        if (profileRes.profile) {
-          const serverData = gameRes.data || ld || emptyData();
-          saveLocalProfile(profileRes.profile);
-          saveLocalData(uid, serverData, profileRes.profile.email || email);
-          setProfile(profileRes.profile);
-          setData(serverData);
+        const serverProfile = profileRes.profile ? withRole({ ...profileRes.profile, email: profileRes.profile.email || email }) : null;
+        if (serverProfile) {
+          const merged = mergeData(ld, dataRes.data);
+          saveLocalProfile(serverProfile);
+          saveLocalData(uid, merged);
+          setProfile(serverProfile);
+          setData(merged);
           setAuthState("ready");
-          fetchNotifs(uid).then(n => setUnreadCount(n.filter((x: any) => !x.read).length)).catch(() => {});
+          bgData(uid, merged);
           return;
         }
         if (lp) {
-          await apiPost("/profile", { userId: uid, ...lp });
-          if (ld) {
-            saveLocalData(uid, ld, email);
-            await apiPost("/gamedata", { userId: uid, data: ld });
-          }
+          bgPost(uid, withRole({ ...lp, email: lp.email || email }));
+          if (ld) bgData(uid, ld);
           return;
         }
       } catch { if (lp) return; }
@@ -1619,27 +1277,32 @@ export default function App() {
 
   const updateData = useCallback((nd: AppData) => {
     setData(nd);
-    if (userId) { saveLocalData(userId, nd, userEmail); apiPost("/gamedata", { userId, data: nd }); }
-  }, [userId, userEmail]);
+    if (userId) { saveLocalData(userId, nd); bgData(userId, nd); }
+  }, [userId]);
 
   function handleProfileComplete(p: UserProfile) {
-    setProfile(p);
-    saveLocalProfile(p);
-    saveLocalData(p.userId, data, p.email || userEmail);
-    setAuthState("ready");
+    const np = withRole(p);
+    setProfile(np); setData(emptyData()); saveLocalProfile(np); bgPost(np.userId, np); setAuthState("ready");
   }
   async function handleLogout() { await supabase.auth.signOut(); setUserId(null); setProfile(null); setData(emptyData()); setAuthState("unauthenticated"); }
-  function copyShareLink() {
+  async function copyShareLink() {
     if (!userId) return;
     const url = new URL(window.location.href);
     url.searchParams.set("player", userId); url.searchParams.delete("view");
-    navigator.clipboard.writeText(url.toString()).catch(() => {});
+    const shareUrl = url.toString();
+    try {
+      if (navigator.share) await navigator.share({ title: `${profile?.firstName || "Player"} on ${APP_NAME}`, url: shareUrl });
+      else await navigator.clipboard.writeText(shareUrl);
+      setShareCopied(true); setTimeout(() => setShareCopied(false), 1800);
+    } catch {
+      window.prompt("Copy your profile link:", shareUrl);
+    }
   }
   function saveSession() {
     const savedSec = syncTimer();
     if (savedSec < 60) return;
     const min = Math.floor(savedSec / 60), today = new Date().toISOString().slice(0,10);
-    const nd = { ...data };
+    const nd = { ...data, sessions: [...data.sessions] };
     const idx = nd.sessions.findIndex(s => s.date === today);
     if (idx >= 0) nd.sessions[idx].minutes += min; else nd.sessions = [...nd.sessions, { date: today, minutes: min }];
     const yest = makeDate(1);
@@ -1657,7 +1320,7 @@ export default function App() {
       nd.shots = [...nd.shots, { made: shotMade, attempted: shotAtt, date: today }];
     }
     updateData(nd);
-    setShotMade(0); setShotAtt(0); setShotMode(false); setShotEntryMode("tracker");
+    setShotMade(0); setShotAtt(0); setShotMode(false);
   }
 
   // Public routes
@@ -1673,21 +1336,20 @@ export default function App() {
 
   const pct = shootingPct(data.shots);
   const totalMade = data.shots.reduce((a,b)=>a+b.made,0), totalAtt = data.shots.reduce((a,b)=>a+b.attempted,0);
-  const graphData = data.sessions.slice(-7).map(s=>({date:shortDate(s.date),minutes:s.minutes}));
+  const graphData = lastDays(7).map(date => ({ date: shortDate(date), minutes: data.sessions.find(s => s.date === date)?.minutes || 0 }));
+  const shotDailyData = lastDays(7).map(date => {
+    const s = data.shots.find(x => x.date === date);
+    return { date: shortDate(date), made: s?.made || 0, attempted: s?.attempted || 0 };
+  });
   const todayMin = (()=>{ const t=new Date().toISOString().slice(0,10); return data.sessions.find(s=>s.date===t)?.minutes||0; })();
+  const todayShots = (()=>{ const t=new Date().toISOString().slice(0,10); return data.shots.find(s=>s.date===t) || { made: 0, attempted: 0, date: t }; })();
   const viewLabels: Record<View,string> = { home:"Home",training:"Training",strength:"Strength",community:"Community" };
   const totalMinutes = data.sessions.reduce((a, b) => a + b.minutes, 0);
   const rank = getRank(totalMinutes);
   const nextRank = getNextRank(totalMinutes);
-  const bottomNav = [
-    { key:"home" as View, label:"Home", Icon:Trophy, img:"1546519638-68e109498ffc" },
-    { key:"training" as View, label:"Training", Icon:Activity, img:"1519861531473-9200262188bf" },
-    { key:"strength" as View, label:"Strength", Icon:Dumbbell, img:"1581009146145-b5ef050c2e1e" },
-    { key:"community" as View, label:"Community", Icon:Users, img:"1546519638-68e109498ffc" },
-  ];
   const navCards = [
-    { key:"strength" as View, label:"Strength", sub:"Track your lifts", img:"1581009146145-b5ef050c2e1e", Icon:Dumbbell },
-    { key:"training" as View, label:"Training", sub:"Long-term graphs", img:"1519861531473-9200262188bf", Icon:TrendingUp },
+    { key:"strength" as View, label:"Strength", sub:"Track your lifts", img:"1534438327776-3db31fd82e9a", Icon:Dumbbell },
+    { key:"training" as View, label:"Training", sub:"Long-term graphs", img:"1606048033063-fe28cdad4f35", Icon:TrendingUp },
     { key:"community" as View, label:"Community", sub:"Feed & players", img:"1546519638-68e109498ffc", Icon:Users },
   ];
 
@@ -1700,7 +1362,7 @@ export default function App() {
           <div><h1 className="text-xl font-black tracking-tight leading-none" style={{fontFamily:"'Roboto Slab',serif"}}>{profile.firstName.toUpperCase()} {profile.lastName.toUpperCase()}</h1><p className="text-xs text-muted-foreground uppercase tracking-widest">{viewLabels[view]}</p></div>
         </div>
         <div className="flex items-center gap-3">
-          <button onClick={copyShareLink} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary"><ExternalLink size={13}/> Share</button>
+          <button onClick={copyShareLink} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary">{shareCopied ? <Check size={13}/> : <ExternalLink size={13}/>} {shareCopied ? "Copied" : "Share"}</button>
           <button onClick={()=>setView("community")} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary"><Users size={13}/> Community</button>
           {/* Notification bell */}
           <button onClick={() => setShowNotifs(true)} className="relative text-muted-foreground hover:text-primary transition-colors">
@@ -1712,7 +1374,7 @@ export default function App() {
       </header>
       {showNotifs && userId && <NotifPanel userId={userId} onClose={() => { setShowNotifs(false); setUnreadCount(0); }} />}
 
-      <main className="max-w-5xl mx-auto px-6 py-8 pb-28 space-y-6">
+      <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
         {view==="training" && <TrainingView data={data}/>}
         {view==="strength" && <StrengthView data={data} onUpdate={updateData}/>}
         {view==="community" && <CommunityPage currentUserId={userId??undefined} currentProfile={profile} onBack={()=>setView("home")}/>}
@@ -1751,16 +1413,16 @@ export default function App() {
 
           {/* Measurables with edit */}
           <EditableMeasurables profile={profile} onSave={updated => {
-            const np = { ...profile, ...updated };
+            const np = withRole({ ...profile, ...updated });
             setProfile(np);
             saveLocalProfile(np);
-            apiPost("/profile", { userId: userId!, ...np });
+            bgPost(userId!, np);
           }} />
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             {[
               {Icon:Flame, label:"Practice Streak",big:String(data.streak),unit:"days",sub:data.streak>=7?"Week+ streak! 🔥":`${7-data.streak} days to a week`,pulse:streakPulse},
-              {Icon:Target,label:"Shooting %",big:String(pct),unit:"%",sub:`${totalMade} / ${totalAtt} all-time`,pulse:false},
+              {Icon:Target,label:"Shots Today",big:String(todayShots.made),unit:`/ ${todayShots.attempted}`,sub:`${totalMade} / ${totalAtt} all-time`,pulse:false},
               {Icon:Clock, label:"Today",big:String(todayMin),unit:"min",sub:"practiced today",pulse:false},
             ].map(({Icon,label,big,unit,sub,pulse})=>(
               <div key={label} className={`bg-card border border-border rounded-2xl p-5 transition-all ${pulse?"ring-2 ring-primary":""}`}>
@@ -1771,7 +1433,7 @@ export default function App() {
             ))}
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-4">
             <div className="bg-card border border-border rounded-2xl p-6 flex flex-col gap-5">
               <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground"><Clock size={13} className="text-primary"/> Practice Timer</div>
               <div className="flex flex-col items-center gap-4">
@@ -1792,29 +1454,15 @@ export default function App() {
                 </div>
               ):(
                 <div className="flex flex-col gap-4">
-                  <div className="grid grid-cols-2 gap-1 bg-secondary rounded-xl p-1">
-                    {([{ key:"tracker", label:"Shot-by-shot", Icon:Target }, { key:"quick", label:"Quick Entry", Icon:Edit3 }] as const).map(({key,label,Icon}) => (
-                      <button key={key} onClick={() => setShotEntryMode(key)} className={`flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-colors ${shotEntryMode === key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
-                        <Icon size={13} /> {label}
-                      </button>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[{lbl:"Made",val:shotMade,set:setShotMade},{lbl:"Attempted",val:shotAtt,set:setShotAtt}].map(({lbl,val,set})=>(
+                      <div key={lbl} className="flex flex-col gap-1.5"><label className="text-xs text-muted-foreground uppercase tracking-wide">{lbl}</label><div className="flex items-center gap-2"><button onClick={()=>set(v=>Math.max(0,v-1))} className="bg-secondary rounded-lg p-1.5 hover:bg-muted"><Minus size={14}/></button><span className="text-2xl font-black text-primary w-8 text-center" style={{fontFamily:"'Roboto Slab',serif"}}>{val}</span><button onClick={()=>set(v=>v+1)} className="bg-secondary rounded-lg p-1.5 hover:bg-muted"><Plus size={14}/></button></div></div>
                     ))}
                   </div>
-                  {shotEntryMode === "tracker" ? (
-                    <div className="grid grid-cols-2 gap-3">
-                      {[{lbl:"Made",val:shotMade,set:setShotMade},{lbl:"Attempted",val:shotAtt,set:setShotAtt}].map(({lbl,val,set})=>(
-                        <div key={lbl} className="flex flex-col gap-1.5"><label className="text-xs text-muted-foreground uppercase tracking-wide">{lbl}</label><div className="flex items-center gap-2"><button onClick={()=>set(v=>Math.max(0,v-1))} className="bg-secondary rounded-lg p-1.5 hover:bg-muted"><Minus size={14}/></button><span className="text-2xl font-black text-primary w-8 text-center" style={{fontFamily:"'Roboto Slab',serif"}}>{val}</span><button onClick={()=>set(v=>v+1)} className="bg-secondary rounded-lg p-1.5 hover:bg-muted"><Plus size={14}/></button></div></div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="flex flex-col gap-1.5"><label className="text-xs text-muted-foreground uppercase tracking-wide">Makes</label><input value={shotMade || ""} onChange={e=>setShotMade(Math.max(0, Number(e.target.value) || 0))} type="number" min="0" placeholder="37" className="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-2xl font-black text-primary outline-none focus:ring-1 focus:ring-primary" style={{fontFamily:"'Roboto Slab',serif"}} /></div>
-                      <div className="flex flex-col gap-1.5"><label className="text-xs text-muted-foreground uppercase tracking-wide">Attempts</label><input value={shotAtt || ""} onChange={e=>setShotAtt(Math.max(0, Number(e.target.value) || 0))} type="number" min="0" placeholder="50" className="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-2xl font-black text-primary outline-none focus:ring-1 focus:ring-primary" style={{fontFamily:"'Roboto Slab',serif"}} /></div>
-                    </div>
-                  )}
                   {shotAtt>0&&<p className="text-center text-sm text-muted-foreground">{shotMade>shotAtt?<span className="text-destructive">Made can&apos;t exceed attempted</span>:<span>= <strong className="text-primary">{Math.round((shotMade/shotAtt)*100)}%</strong> this session</span>}</p>}
                   <div className="flex gap-2">
                     <button onClick={saveShots} disabled={shotAtt===0||shotMade>shotAtt} className="flex-1 flex items-center justify-center gap-2 bg-primary text-primary-foreground font-semibold py-2.5 rounded-xl hover:bg-accent text-sm disabled:opacity-30"><Check size={15}/> Save</button>
-                    <button onClick={()=>{setShotMode(false);setShotMade(0);setShotAtt(0);setShotEntryMode("tracker");}} className="flex items-center gap-2 bg-secondary text-secondary-foreground font-semibold px-4 py-2.5 rounded-xl hover:bg-muted text-sm"><X size={15}/></button>
+                    <button onClick={()=>{setShotMode(false);setShotMade(0);setShotAtt(0);}} className="flex items-center gap-2 bg-secondary text-secondary-foreground font-semibold px-4 py-2.5 rounded-xl hover:bg-muted text-sm"><X size={15}/></button>
                   </div>
                 </div>
               )}
@@ -1827,28 +1475,28 @@ export default function App() {
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false}/>
               <XAxis dataKey="date" tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false}/>
               <YAxis tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false} unit=" m"/>
-              <Tooltip content={<ChartTip unit=" min"/>} cursor={{fill:"rgba(249,115,22,0.07)"}}/>
-              <Bar name="home-minutes" dataKey="minutes" fill="#f97316" radius={[6,6,0,0]}/>
+              <Tooltip content={<ChartTip unit=" min"/>} cursor={{fill:"rgba(20,184,166,0.07)"}}/>
+              <Bar name="home-minutes" dataKey="minutes" fill="#14b8a6" radius={[6,6,0,0]}/>
             </BarChart></ResponsiveContainer></div>
           </div>
 
           <div className="bg-card border border-border rounded-2xl p-6">
-            <div className="flex items-center justify-between mb-5"><div className="flex items-center gap-2"><Target size={14} className="text-primary"/><span className="text-xs uppercase tracking-wider text-muted-foreground">Shooting % Over Time</span></div><span className="text-xs text-muted-foreground">Per session</span></div>
-            <div className="h-52"><ResponsiveContainer width="100%" height="100%"><LineChart id="h-shooting" data={data.shots.map((s,i)=>({session:`S${i+1}`,pct:s.attempted>0?Math.round((s.made/s.attempted)*100):0}))} margin={{top:4,right:4,bottom:0,left:-20}}>
+            <div className="flex items-center justify-between mb-5"><div className="flex items-center gap-2"><Target size={14} className="text-primary"/><span className="text-xs uppercase tracking-wider text-muted-foreground">Daily Shot Totals</span></div><span className="text-xs text-muted-foreground">Last 7 days</span></div>
+            <div className="h-52"><ResponsiveContainer width="100%" height="100%"><BarChart id="h-shooting" data={shotDailyData} barSize={22} margin={{top:4,right:4,bottom:0,left:-20}}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false}/>
-              <XAxis dataKey="session" tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false}/>
-              <YAxis domain={[0,100]} tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false} unit="%"/>
-              <ReferenceLine y={pct} stroke="rgba(249,115,22,0.3)" strokeDasharray="4 4"/>
-              <Tooltip content={<ChartTip unit="%"/>} cursor={{stroke:"rgba(249,115,22,0.2)",strokeWidth:1}}/>
-              <Line name="home-pct" type="monotone" dataKey="pct" stroke="#f97316" strokeWidth={2.5} dot={{fill:"#f97316",r:4,strokeWidth:0}} activeDot={{r:6,fill:"#f97316"}}/>
-            </LineChart></ResponsiveContainer></div>
-            <p className="text-xs text-muted-foreground mt-3">Dashed line = all-time average ({pct}%)</p>
+              <XAxis dataKey="date" tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false}/>
+              <YAxis tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false}/>
+              <Tooltip content={<ChartTip/>} cursor={{fill:"rgba(20,184,166,0.07)"}}/>
+              <Bar name="Made" dataKey="made" fill="#14b8a6" radius={[6,6,0,0]}/>
+              <Bar name="Attempted" dataKey="attempted" fill="#065f46" radius={[6,6,0,0]}/>
+            </BarChart></ResponsiveContainer></div>
+            <p className="text-xs text-muted-foreground mt-3">All-time shooting average: {pct}%</p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             {navCards.map(({key,label,sub,img,Icon})=>(
               <button key={key} onClick={()=>setView(key)} className="relative rounded-xl overflow-hidden h-28 bg-zinc-900 border-none cursor-pointer p-0 text-left group w-full">
-                <img src={`https://images.unsplash.com/photo-${img}?w=400&h=260&fit=crop&auto=format`} alt={label} className="w-full h-full object-cover opacity-60 group-hover:opacity-75 transition-opacity"/>
+                <img src={`https://images.unsplash.com/photo-${img}?w=400&h=260&fit=crop&auto=format`} alt={label} className="w-full h-full object-cover opacity-40 group-hover:opacity-60 transition-opacity"/>
                 <div className="absolute inset-0 p-3 flex flex-col justify-between">
                   <div className="flex items-center gap-1.5 text-primary"><Icon size={13}/><span className="text-xs font-semibold uppercase tracking-wide">{label}</span></div>
                   <div className="flex items-center justify-between"><span className="text-xs text-white/50">{sub}</span><ArrowRight size={13} className="text-white/40 group-hover:text-primary"/></div>
@@ -1859,19 +1507,7 @@ export default function App() {
           <p className="text-center text-xs text-muted-foreground pb-4">Keep going, {profile.firstName}! 🏀</p>
         </>}
       </main>
-      <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-background/95 backdrop-blur">
-        <div className="max-w-5xl mx-auto px-3 py-2 grid grid-cols-4 gap-2">
-          {bottomNav.map(({key,label,Icon,img}) => (
-            <button key={key} onClick={() => setView(key)} className={`relative overflow-hidden rounded-xl border px-2 py-2 min-h-14 transition-all ${view === key ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"}`}>
-              <img src={`https://images.unsplash.com/photo-${img}?w=240&h=120&fit=crop&auto=format`} alt="" className={`absolute inset-0 w-full h-full object-cover transition-opacity ${view === key ? "opacity-20" : "opacity-0 sm:opacity-10"}`} />
-              <span className="relative flex flex-col items-center gap-1 text-[11px] font-semibold">
-                <Icon size={17} />
-                {label}
-              </span>
-            </button>
-          ))}
-        </div>
-      </nav>
     </div>
   );
 }
+
