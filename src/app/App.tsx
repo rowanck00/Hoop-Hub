@@ -3,7 +3,7 @@ import {
   Flame, Target, Clock, TrendingUp, Plus, Minus, RotateCcw,
   Play, Pause, Check, X, ChevronLeft, Dumbbell, ArrowRight,
   LogOut, Users, Globe, Copy, ExternalLink, Search,
-  Heart, MessageCircle, Repeat2, Quote, Trash2, Video, Edit3,
+  Heart, MessageCircle, Repeat2, Quote, Trash2, Video, Edit3, Activity,
 } from "lucide-react";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis,
@@ -343,7 +343,7 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
             className="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary" />
           <label className="flex items-center justify-center gap-2 border border-dashed border-border rounded-xl px-3 py-3 text-xs text-muted-foreground hover:text-primary hover:border-primary cursor-pointer">
             <Video size={14} /> Choose from camera roll
-            <input type="file" accept="video/*" capture="environment" className="hidden" onChange={e => setLocalVideoName(e.target.files?.[0]?.name || "")} />
+            <input type="file" accept="video/*" className="hidden" onChange={e => setLocalVideoName(e.target.files?.[0]?.name || "")} />
           </label>
           {localVideoName && <p className="text-xs text-muted-foreground">Selected: {localVideoName}. To share it with everyone, upload it first and paste the video link above.</p>}
           {videoId ? <div className="aspect-video rounded-xl overflow-hidden bg-zinc-900"><iframe src={`https://www.youtube.com/embed/${videoId}`} title="preview" allowFullScreen className="w-full h-full" /></div>
@@ -773,8 +773,8 @@ function PlayerProfileView({ player, onBack, currentUserId, currentUserName }: {
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
               <XAxis dataKey="date" tick={{ fill: "#8a8680", fontSize: 11 }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fill: "#8a8680", fontSize: 11 }} axisLine={false} tickLine={false} unit=" m" />
-              <Tooltip content={<ChartTip unit=" min" />} cursor={{ fill: "rgba(34,197,94,0.07)" }} />
-              <Bar name="pub-min" dataKey="minutes" fill="#22c55e" radius={[6, 6, 0, 0]} />
+              <Tooltip content={<ChartTip unit=" min" />} cursor={{ fill: "rgba(21,148,71,0.07)" }} />
+              <Bar name="pub-min" dataKey="minutes" fill="#159447" radius={[6, 6, 0, 0]} />
             </BarChart></ResponsiveContainer></div>
           </div>
         )}
@@ -785,9 +785,9 @@ function PlayerProfileView({ player, onBack, currentUserId, currentUserName }: {
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
               <XAxis dataKey="session" tick={{ fill: "#8a8680", fontSize: 11 }} axisLine={false} tickLine={false} />
               <YAxis domain={[0, 100]} tick={{ fill: "#8a8680", fontSize: 11 }} axisLine={false} tickLine={false} unit="%" />
-              <ReferenceLine y={pct} stroke="rgba(34,197,94,0.3)" strokeDasharray="4 4" />
-              <Tooltip content={<ChartTip unit="%" />} cursor={{ stroke: "rgba(34,197,94,0.2)", strokeWidth: 1 }} />
-              <Line name="pub-pct" type="monotone" dataKey="pct" stroke="#22c55e" strokeWidth={2.5} dot={{ fill: "#22c55e", r: 4, strokeWidth: 0 }} activeDot={{ r: 6, fill: "#22c55e" }} />
+              <ReferenceLine y={pct} stroke="rgba(21,148,71,0.3)" strokeDasharray="4 4" />
+              <Tooltip content={<ChartTip unit="%" />} cursor={{ stroke: "rgba(21,148,71,0.2)", strokeWidth: 1 }} />
+              <Line name="pub-pct" type="monotone" dataKey="pct" stroke="#159447" strokeWidth={2.5} dot={{ fill: "#159447", r: 4, strokeWidth: 0 }} activeDot={{ r: 6, fill: "#159447" }} />
             </LineChart></ResponsiveContainer></div>
           </div>
         )}
@@ -1002,8 +1002,8 @@ function FlightTimeTool() {
           <p className="text-xs text-muted-foreground">Record or choose a jump video, pause on takeoff and landing, and the app converts flight time to vertical.</p>
         </div>
         <label className="bg-primary text-primary-foreground rounded-xl px-3 py-2 text-xs font-semibold cursor-pointer whitespace-nowrap">
-          Use Camera
-          <input type="file" accept="video/*" capture="environment" className="hidden" onChange={e => loadVideo(e.target.files?.[0])} />
+          Choose Video
+          <input type="file" accept="video/*" className="hidden" onChange={e => loadVideo(e.target.files?.[0])} />
         </label>
       </div>
 
@@ -1022,7 +1022,7 @@ function FlightTimeTool() {
         </div>
       ) : (
         <div className="border border-dashed border-border rounded-xl p-6 text-center text-sm text-muted-foreground">
-          On phone, tap Use Camera to record from your camera or pick from camera roll. On desktop, choose a jump video file.
+          On phone, tap Choose Video to pick from camera roll. On desktop, choose a jump video file.
         </div>
       )}
     </div>
@@ -1043,7 +1043,7 @@ function TrainingView({ data }: { data: AppData }) {
     return { month: lbl, pct: att > 0 ? Math.round((made / att) * 100) : null };
   });
   const avgPct = shootingPct(data.shots);
-  const heatBg = ["#1e1e20","rgba(34,197,94,0.2)","rgba(34,197,94,0.4)","rgba(34,197,94,0.7)","#22c55e"];
+  const heatBg = ["#1e1e20","rgba(21,148,71,0.2)","rgba(21,148,71,0.4)","rgba(21,148,71,0.7)","#159447"];
   return (
     <div className="space-y-6">
       <ViewHero img="1519861531473-9200262188bf" title="Training" sub="Long-term progress" />
@@ -1054,8 +1054,8 @@ function TrainingView({ data }: { data: AppData }) {
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
           <XAxis dataKey="week" tick={{ fill:"#8a8680",fontSize:11 }} axisLine={false} tickLine={false} />
           <YAxis tick={{ fill:"#8a8680",fontSize:11 }} axisLine={false} tickLine={false} unit=" m" />
-          <Tooltip content={<ChartTip unit=" min" />} cursor={{ fill:"rgba(34,197,94,0.07)" }} />
-          <Bar name="weekly-min" dataKey="minutes" fill="#22c55e" radius={[6,6,0,0]} />
+          <Tooltip content={<ChartTip unit=" min" />} cursor={{ fill:"rgba(21,148,71,0.07)" }} />
+          <Bar name="weekly-min" dataKey="minutes" fill="#159447" radius={[6,6,0,0]} />
         </BarChart></ResponsiveContainer></div>
       </div>
       <div className="bg-card border border-border rounded-2xl p-6">
@@ -1064,9 +1064,9 @@ function TrainingView({ data }: { data: AppData }) {
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
           <XAxis dataKey="month" tick={{ fill:"#8a8680",fontSize:11 }} axisLine={false} tickLine={false} />
           <YAxis domain={[0,100]} tick={{ fill:"#8a8680",fontSize:11 }} axisLine={false} tickLine={false} unit="%" />
-          <ReferenceLine y={avgPct} stroke="rgba(34,197,94,0.3)" strokeDasharray="4 4" />
-          <Tooltip content={<ChartTip unit="%" />} cursor={{ stroke:"rgba(34,197,94,0.2)",strokeWidth:1 }} />
-          <Line name="monthly-pct" type="monotone" dataKey="pct" stroke="#22c55e" strokeWidth={2.5} connectNulls dot={{ fill:"#22c55e",r:4,strokeWidth:0 }} activeDot={{ r:6,fill:"#22c55e" }} />
+          <ReferenceLine y={avgPct} stroke="rgba(21,148,71,0.3)" strokeDasharray="4 4" />
+          <Tooltip content={<ChartTip unit="%" />} cursor={{ stroke:"rgba(21,148,71,0.2)",strokeWidth:1 }} />
+          <Line name="monthly-pct" type="monotone" dataKey="pct" stroke="#159447" strokeWidth={2.5} connectNulls dot={{ fill:"#159447",r:4,strokeWidth:0 }} activeDot={{ r:6,fill:"#159447" }} />
         </LineChart></ResponsiveContainer></div>
         <p className="text-xs text-muted-foreground mt-3">Dashed = all-time avg ({avgPct}%)</p>
       </div>
@@ -1097,7 +1097,7 @@ function StrengthView({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData
         :<button onClick={()=>setAddEx(true)} className="px-4 py-2 rounded-xl text-sm bg-secondary text-muted-foreground hover:text-foreground flex items-center gap-1.5"><Plus size={13}/> Add lift</button>}
       </div>
       <div className="grid grid-cols-3 gap-4">{[{l:"Best",v:best?`${best} ${ex.unit}`:"—"},{l:"Last",v:last!==null?`${last} ${ex.unit}`:"—"},{l:"Sessions",v:String(ex.history.length)}].map(s=>(<div key={s.l} className="bg-card border border-border rounded-2xl p-4"><p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">{s.l}</p><p className="text-2xl font-black text-primary" style={{fontFamily:"'Roboto Slab',serif"}}>{s.v}</p></div>))}</div>
-      {graphData.length>=2?(<div className="bg-card border border-border rounded-2xl p-6"><div className="flex items-center gap-2 mb-5"><TrendingUp size={14} className="text-primary"/><span className="text-xs uppercase tracking-wider text-muted-foreground">{ex.name} — Weight Over Time</span></div><div className="h-48"><ResponsiveContainer width="100%" height="100%"><LineChart id="s-strength" data={graphData} margin={{top:4,right:4,bottom:0,left:-10}}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false}/><XAxis dataKey="date" tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false}/><YAxis tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false} unit={` ${ex.unit}`}/><Tooltip content={<ChartTip unit={` ${ex.unit}`}/>} cursor={{stroke:"rgba(34,197,94,0.2)",strokeWidth:1}}/><Line name="strength-weight" type="monotone" dataKey="weight" stroke="#22c55e" strokeWidth={2.5} dot={{fill:"#22c55e",r:4,strokeWidth:0}} activeDot={{r:6,fill:"#22c55e"}}/></LineChart></ResponsiveContainer></div></div>)
+      {graphData.length>=2?(<div className="bg-card border border-border rounded-2xl p-6"><div className="flex items-center gap-2 mb-5"><TrendingUp size={14} className="text-primary"/><span className="text-xs uppercase tracking-wider text-muted-foreground">{ex.name} — Weight Over Time</span></div><div className="h-48"><ResponsiveContainer width="100%" height="100%"><LineChart id="s-strength" data={graphData} margin={{top:4,right:4,bottom:0,left:-10}}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false}/><XAxis dataKey="date" tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false}/><YAxis tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false} unit={` ${ex.unit}`}/><Tooltip content={<ChartTip unit={` ${ex.unit}`}/>} cursor={{stroke:"rgba(21,148,71,0.2)",strokeWidth:1}}/><Line name="strength-weight" type="monotone" dataKey="weight" stroke="#159447" strokeWidth={2.5} dot={{fill:"#159447",r:4,strokeWidth:0}} activeDot={{r:6,fill:"#159447"}}/></LineChart></ResponsiveContainer></div></div>)
       :<div className="bg-card border border-border rounded-2xl p-8 text-center text-muted-foreground text-sm">Log at least 2 sessions to see your chart.</div>}
       <div className="bg-card border border-border rounded-2xl p-6">
         <div className="flex items-center justify-between mb-4"><span className="text-xs uppercase tracking-wider text-muted-foreground">History</span>{!adding&&<button onClick={()=>setAdding(true)} className="flex items-center gap-1.5 bg-primary text-primary-foreground text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-accent"><Plus size={12}/> Log today</button>}</div>
@@ -1541,8 +1541,8 @@ export default function App() {
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false}/>
               <XAxis dataKey="date" tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false}/>
               <YAxis tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false} unit=" m"/>
-              <Tooltip content={<ChartTip unit=" min"/>} cursor={{fill:"rgba(34,197,94,0.07)"}}/>
-              <Bar name="home-minutes" dataKey="minutes" fill="#22c55e" radius={[6,6,0,0]}/>
+              <Tooltip content={<ChartTip unit=" min"/>} cursor={{fill:"rgba(21,148,71,0.07)"}}/>
+              <Bar name="home-minutes" dataKey="minutes" fill="#159447" radius={[6,6,0,0]}/>
             </BarChart></ResponsiveContainer></div>
           </div>
 
@@ -1552,9 +1552,9 @@ export default function App() {
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false}/>
               <XAxis dataKey="date" tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false}/>
               <YAxis tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false}/>
-              <Tooltip content={<ChartTip/>} cursor={{fill:"rgba(34,197,94,0.07)"}}/>
-              <Bar name="Made" dataKey="made" fill="#22c55e" radius={[6,6,0,0]}/>
-              <Bar name="Attempted" dataKey="attempted" fill="#065f46" radius={[6,6,0,0]}/>
+              <Tooltip content={<ChartTip/>} cursor={{fill:"rgba(21,148,71,0.07)"}}/>
+              <Bar name="Made" dataKey="made" fill="#159447" radius={[6,6,0,0]}/>
+              <Bar name="Attempted" dataKey="attempted" fill="#2b332d" radius={[6,6,0,0]}/>
             </BarChart></ResponsiveContainer></div>
             <p className="text-xs text-muted-foreground mt-3">All-time shooting average: {pct}%</p>
           </div>
