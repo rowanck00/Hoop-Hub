@@ -104,6 +104,31 @@ function shootingPct(shots: ShotEntry[]) {
 function extractYTId(url: string) { const m = url.match(/(?:youtu\.be\/|v=|\/embed\/)([A-Za-z0-9_-]{11})/); return m ? m[1] : null; }
 function isDirectVideoUrl(url?: string) { return !!url && /^https:\/\/.+\.(mp4|webm|mov)(\?.*)?$/i.test(url); }
 function verticalFromFlightTime(seconds: number) { return Math.max(0, Math.round(48.26 * seconds * seconds * 10) / 10); }
+function elasticCheck(base: number, next: number, label: string) {
+  if (!base || !next) return { ready: false, passed: false, severity: "", title: label, diff: 0, pct: 0, text: "" };
+  const diff = next - base;
+  const pct = base > 0 ? (diff / base) * 100 : 0;
+  const clearPass = diff >= 2 || pct >= 9;
+  const borderline = !clearPass && (diff >= 1.5 || pct >= 7);
+  let severity = "large";
+  if (diff >= 1 || pct >= 5) severity = "small";
+  if (borderline) severity = "borderline";
+  const amount = `${diff.toFixed(1)} in (${Math.round(pct)}%)`;
+  return {
+    ready: true,
+    passed: clearPass || borderline,
+    borderline,
+    severity,
+    title: label,
+    diff,
+    pct,
+    text: clearPass
+      ? `Passed. Improvement was ${amount}, which is enough for this app model.`
+      : borderline
+        ? `Close enough / borderline pass. Improvement was ${amount}. Not a clear deficit, but keep watching it.`
+        : `${severity === "small" ? "Small" : "Large"} deficit detected. Improvement was only ${amount}; the goal is about 2 inches or roughly 10%.`,
+  };
+}
 function est1rm(weight: number, reps: number) {
   if (reps <= 1) return Math.round(weight);
   if (reps <= 10) return Math.round(weight * (36 / (37 - reps)));
@@ -1415,8 +1440,10 @@ function JumpTestingSection({ data, onUpdate }: { data: AppData; onUpdate: (d: A
   const rsiHistory = tests.filter(t => t.rsi).map(t => ({ date: shortDate(t.date), rsi: t.rsi }));
   const latest = (t: JumpTestEntry["type"]) => [...tests].reverse().find(x => x.type === t)?.height || 0;
   const nonCmj = latest("Squat Jump"), cmj = latest("Countermovement Jump"), drop = latest("Drop Jump");
-  const lowElasticPass = nonCmj && cmj && (cmj - nonCmj >= Math.max(2, nonCmj * 0.1));
-  const highElasticPass = cmj && drop && (drop - cmj >= Math.max(2, cmj * 0.1));
+  const lowElastic = elasticCheck(nonCmj, cmj, "Low-End Elastic Check");
+  const highElastic = elasticCheck(cmj, drop, "High-End Elastic Check");
+  const lowElasticPass = lowElastic.ready && lowElastic.passed;
+  const highElasticPass = highElastic.ready && highElastic.passed;
   function save() {
     const h = parseFloat(height);
     if (!h) return;
@@ -1426,7 +1453,7 @@ function JumpTestingSection({ data, onUpdate }: { data: AppData; onUpdate: (d: A
   }
   return (
     <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
-      <div><div className="flex items-center gap-2"><Activity size={14} className="text-primary"/><span className="text-xs uppercase tracking-wider text-muted-foreground">Elastic Deficit Testing</span></div><p className="text-xs text-muted-foreground mt-1">Test non-countermovement jump, countermovement jump, and an 18-24 inch drop jump. Passing means roughly a 2 inch or 10% increase between tests.</p></div>
+      <div><div className="flex items-center gap-2"><Activity size={14} className="text-primary"/><span className="text-xs uppercase tracking-wider text-muted-foreground">Elastic Deficit Testing</span></div><p className="text-xs text-muted-foreground mt-1">Test non-countermovement jump, countermovement jump, and an 18-24 inch drop jump. Passing means about a 2 inch increase or close to 10%, with a small margin for video/manual error.</p></div>
       <div className="grid md:grid-cols-4 gap-3">
         <select value={type} onChange={e => setType(e.target.value as JumpTestEntry["type"])} className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none">
           <option value="Squat Jump">Non-Countermovement Jump</option><option value="Countermovement Jump">Countermovement Jump</option><option value="Drop Jump">Drop Jump</option>
@@ -1437,8 +1464,8 @@ function JumpTestingSection({ data, onUpdate }: { data: AppData; onUpdate: (d: A
       </div>
       {type === "Drop Jump" && <button type="button" onClick={() => document.getElementById("flight-time-tool")?.scrollIntoView({ behavior: "smooth", block: "start" })} className="w-full bg-secondary text-secondary-foreground rounded-xl px-3 py-2 text-sm font-semibold">Test Jump Height With Flight Time</button>}
       <div className="grid md:grid-cols-2 gap-3">
-        <div className="bg-background border border-border rounded-xl p-4"><p className="text-primary font-black mb-1">Low-End Elastic Check</p><p className="text-sm text-muted-foreground">{nonCmj && cmj ? (lowElasticPass ? "Passed. CMJ is sufficiently higher than non-countermovement jump." : "Inelastic deficit detected: CMJ is not at least 2 inches or 10% higher. This points to low-end stretch shortening cycle and basic eccentric limitations.") : "Enter non-countermovement jump and CMJ."}</p>{nonCmj && cmj && !lowElasticPass && <p className="text-sm mt-2">Recommended: basic extensive plyometrics, basic intensive plyometrics, and higher velocity lifting.</p>}</div>
-        <div className="bg-background border border-border rounded-xl p-4"><p className="text-primary font-black mb-1">High-End Elastic Check</p><p className="text-sm text-muted-foreground">{cmj && drop ? (highElasticPass ? "Passed. Drop jump is sufficiently higher than CMJ." : "High stretch shortening cycle deficit detected: drop jump is not at least 2 inches or 10% higher than CMJ.") : "Enter CMJ and drop jump."}</p>{cmj && drop && !highElasticPass && <p className="text-sm mt-2">Recommended: intensive plyometrics, depth jumps, reactive jumps, and eccentric-focused training.</p>}</div>
+        <div className="bg-background border border-border rounded-xl p-4"><p className="text-primary font-black mb-1">Low-End Elastic Check</p><p className="text-sm text-muted-foreground">{lowElastic.ready ? lowElastic.text : "Enter non-countermovement jump and CMJ."}</p>{lowElastic.ready && !lowElasticPass && <p className="text-sm mt-2">Recommended: basic extensive plyometrics, basic intensive plyometrics, and higher velocity lifting.</p>}</div>
+        <div className="bg-background border border-border rounded-xl p-4"><p className="text-primary font-black mb-1">High-End Elastic Check</p><p className="text-sm text-muted-foreground">{highElastic.ready ? highElastic.text : "Enter CMJ and drop jump."}</p>{highElastic.ready && !highElasticPass && <p className="text-sm mt-2">Recommended: intensive plyometrics, depth jumps, reactive jumps, and eccentric-focused training.</p>}</div>
       </div>
       {nonCmj && cmj && drop && lowElasticPass && highElasticPass && <div className="bg-background border border-border rounded-xl p-4"><p className="text-primary font-black mb-1">Elastic Tests Passed</p><p className="text-sm">Use a long conjugate sequence: touch all qualities while focusing on one main quality each month.</p></div>}
       {rsiHistory.length >= 2 && <div className="h-44"><ResponsiveContainer width="100%" height="100%"><LineChart data={rsiHistory}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" /><XAxis dataKey="date" tick={{fill:"#8a8680",fontSize:11}} /><YAxis tick={{fill:"#8a8680",fontSize:11}} /><Tooltip content={<ChartTip />} /><Line type="monotone" dataKey="rsi" stroke="#159447" strokeWidth={2.5} /></LineChart></ResponsiveContainer></div>}
@@ -1458,12 +1485,16 @@ function AthleticAnalysisSection({ data, onUpdate }: { data: AppData; onUpdate: 
   const sj = latest("Squat Jump"), cmj = latest("Countermovement Jump"), dj = latest("Drop Jump");
   const pc = parseFloat(lifts.powerClean), squat = parseFloat(lifts.deepBackSquat);
   const powerRatio = pc && squat ? pc / squat : 0;
+  const lowElastic = elasticCheck(sj, cmj, "Low-End Elastic Check");
+  const highElastic = elasticCheck(cmj, dj, "High-End Elastic Check");
   const findings: { title: string; text: string; recs: string }[] = [];
   if (powerRatio) findings.push(powerRatio < 0.7
     ? { title: "Power Deficit Detected", text: "The model suggests you produce force well but may struggle to express it explosively.", recs: "Olympic lifting, jump squats, sprinting, ballistic movements, high-velocity lifting." }
     : { title: "Strength Deficit Detected", text: "The model suggests your explosive expression is solid relative to your max strength.", recs: "Heavy squats, front squats, and max strength work." });
-  if (sj && cmj && (cmj - sj < Math.max(2, sj * 0.1))) findings.push({ title: "Low-End Elastic Deficit", text: "CMJ is not at least 2 inches or 10% higher than non-countermovement jump, indicating low-end stretch shortening cycle and basic eccentric limitations.", recs: "Basic extensive plyometrics, basic intensive plyometrics, and higher velocity lifting." });
-  if (cmj && dj && (dj - cmj < Math.max(2, cmj * 0.1))) findings.push({ title: "High Stretch Shortening Cycle Deficit", text: "Drop jump is not at least 2 inches or 10% higher than CMJ, indicating limited high-end stretch shortening cycle use.", recs: "Intensive plyometrics, shock plyos like depth jumps, reactive jumps, and eccentric-focused training." });
+  if (lowElastic.ready && lowElastic.borderline) findings.push({ title: "Borderline Low-End Elastic Result", text: lowElastic.text, recs: "Retest when fresh. Keep some basic extensive plyometrics and higher velocity lifting in the plan, but this is not a clear deficit." });
+  if (lowElastic.ready && !lowElastic.passed) findings.push({ title: `${lowElastic.severity === "small" ? "Small" : "Large"} Low-End Elastic Deficit`, text: `${lowElastic.text} This can indicate low-end stretch shortening cycle and basic eccentric limitations.`, recs: "Basic extensive plyometrics, basic intensive plyometrics, and higher velocity lifting." });
+  if (highElastic.ready && highElastic.borderline) findings.push({ title: "Borderline High-End Elastic Result", text: highElastic.text, recs: "Retest when fresh. Keep some intensive/reactive plyometrics in the plan, but this is not a clear deficit." });
+  if (highElastic.ready && !highElastic.passed) findings.push({ title: `${highElastic.severity === "small" ? "Small" : "Large"} High Stretch Shortening Cycle Deficit`, text: `${highElastic.text} This can indicate limited high-end stretch shortening cycle use.`, recs: "Intensive plyometrics, shock plyos like depth jumps, reactive jumps, and eccentric-focused training." });
   if (!findings.length) findings.push({ title: "Balanced Athlete", text: "No major deficit is flagged by this app model.", recs: "Use a long conjugate sequence system: touch everything while focusing on one specific quality each month." });
   return (
     <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
