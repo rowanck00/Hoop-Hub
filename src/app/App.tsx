@@ -1495,6 +1495,8 @@ export default function App() {
   const [view, setView] = useState<View>("home");
   const [timerOn, setTimerOn] = useState(false), [timerSec, setTimerSec] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerStartedAtRef = useRef<number | null>(null);
+  const timerBaseSecRef = useRef(0);
   const [shotMade, setShotMade] = useState(0), [shotAtt, setShotAtt] = useState(0), [shotMode, setShotMode] = useState(false);
   const [shotEntryMode, setShotEntryMode] = useState<"tracker" | "quick">("tracker");
   const [streakPulse, setStreakPulse] = useState(false);
@@ -1567,10 +1569,52 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  function currentTimerSec() {
+    if (!timerOn || timerStartedAtRef.current === null) return timerSec;
+    return timerBaseSecRef.current + Math.max(0, Math.floor((Date.now() - timerStartedAtRef.current) / 1000));
+  }
+  function syncTimer() {
+    const next = currentTimerSec();
+    setTimerSec(next);
+    return next;
+  }
+  function startTimer() {
+    timerBaseSecRef.current = timerSec;
+    timerStartedAtRef.current = Date.now();
+    setTimerOn(true);
+  }
+  function pauseTimer() {
+    const next = syncTimer();
+    timerBaseSecRef.current = next;
+    timerStartedAtRef.current = null;
+    setTimerOn(false);
+  }
+  function resetTimer() {
+    timerBaseSecRef.current = 0;
+    timerStartedAtRef.current = null;
+    setTimerOn(false);
+    setTimerSec(0);
+  }
+
   useEffect(() => {
-    if (timerOn) timerRef.current = setInterval(() => setTimerSec(s => s + 1), 1000);
-    else if (timerRef.current) clearInterval(timerRef.current);
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+    if (!timerOn) {
+      if (timerRef.current) clearInterval(timerRef.current);
+      timerRef.current = null;
+      return;
+    }
+    const update = () => { syncTimer(); };
+    update();
+    timerRef.current = setInterval(update, 1000);
+    window.addEventListener("focus", update);
+    window.addEventListener("pageshow", update);
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      timerRef.current = null;
+      window.removeEventListener("focus", update);
+      window.removeEventListener("pageshow", update);
+      document.removeEventListener("visibilitychange", update);
+    };
   }, [timerOn]);
 
   const updateData = useCallback((nd: AppData) => {
@@ -1592,14 +1636,15 @@ export default function App() {
     navigator.clipboard.writeText(url.toString()).catch(() => {});
   }
   function saveSession() {
-    if (timerSec < 60) return;
-    const min = Math.floor(timerSec / 60), today = new Date().toISOString().slice(0,10);
+    const savedSec = syncTimer();
+    if (savedSec < 60) return;
+    const min = Math.floor(savedSec / 60), today = new Date().toISOString().slice(0,10);
     const nd = { ...data };
     const idx = nd.sessions.findIndex(s => s.date === today);
     if (idx >= 0) nd.sessions[idx].minutes += min; else nd.sessions = [...nd.sessions, { date: today, minutes: min }];
     const yest = makeDate(1);
     if (nd.lastPracticeDate !== today) { nd.streak = nd.lastPracticeDate === yest ? nd.streak + 1 : 1; setStreakPulse(true); setTimeout(() => setStreakPulse(false), 800); }
-    nd.lastPracticeDate = today; updateData(nd); setTimerOn(false); setTimerSec(0);
+    nd.lastPracticeDate = today; updateData(nd); resetTimer();
   }
   function saveShots() {
     if (shotAtt === 0 || shotMade > shotAtt) return;
@@ -1732,8 +1777,8 @@ export default function App() {
               <div className="flex flex-col items-center gap-4">
                 <div className="text-6xl font-black tabular-nums tracking-tight" style={{fontFamily:"'DM Mono',monospace"}}>{formatTime(timerSec)}</div>
                 <div className="flex gap-3">
-                  <button onClick={()=>setTimerOn(v=>!v)} className="flex items-center gap-2 bg-primary text-primary-foreground font-semibold px-5 py-2.5 rounded-xl hover:bg-accent text-sm">{timerOn?<Pause size={16}/>:<Play size={16}/>}{timerOn?"Pause":"Start"}</button>
-                  <button onClick={()=>{setTimerOn(false);setTimerSec(0);}} className="flex items-center gap-2 bg-secondary text-secondary-foreground font-semibold px-4 py-2.5 rounded-xl hover:bg-muted text-sm"><RotateCcw size={16}/></button>
+                  <button onClick={timerOn ? pauseTimer : startTimer} className="flex items-center gap-2 bg-primary text-primary-foreground font-semibold px-5 py-2.5 rounded-xl hover:bg-accent text-sm">{timerOn?<Pause size={16}/>:<Play size={16}/>}{timerOn?"Pause":"Start"}</button>
+                  <button onClick={resetTimer} className="flex items-center gap-2 bg-secondary text-secondary-foreground font-semibold px-4 py-2.5 rounded-xl hover:bg-muted text-sm"><RotateCcw size={16}/></button>
                 </div>
                 <button onClick={saveSession} disabled={timerSec<60} className="w-full flex items-center justify-center gap-2 border border-primary text-primary font-semibold py-2.5 rounded-xl hover:bg-primary/10 text-sm disabled:opacity-30 disabled:cursor-not-allowed"><Check size={15}/> Save Session ({Math.floor(timerSec/60)} min)</button>
               </div>
