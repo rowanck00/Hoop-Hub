@@ -963,12 +963,18 @@ function FlightTimeTool() {
   const [landing, setLanding] = useState<number | null>(null);
   const [fps, setFps] = useState(240);
   const [speed, setSpeed] = useState(0.25);
+  const [videoTime, setVideoTime] = useState(0);
   const flight = takeoff !== null && landing !== null && landing > takeoff ? landing - takeoff : 0;
   const vertical = flight ? verticalFromFlightTime(flight) : 0;
 
-  useEffect(() => {
-    if (videoRef.current) videoRef.current.playbackRate = speed;
-  }, [speed, videoUrl]);
+  const applySpeed = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.defaultPlaybackRate = speed;
+    video.playbackRate = speed;
+  }, [speed]);
+
+  useEffect(() => { applySpeed(); }, [applySpeed, videoUrl]);
 
   function loadVideo(file?: File) {
     if (!file) return;
@@ -976,6 +982,7 @@ function FlightTimeTool() {
     setVideoUrl(URL.createObjectURL(file));
     setTakeoff(null);
     setLanding(null);
+    setVideoTime(0);
   }
   function markTakeoff() { if (videoRef.current) setTakeoff(videoRef.current.currentTime); }
   function markLanding() { if (videoRef.current) setLanding(videoRef.current.currentTime); }
@@ -983,8 +990,13 @@ function FlightTimeTool() {
     const video = videoRef.current;
     if (!video) return;
     video.pause();
-    const next = video.currentTime + direction / fps;
-    video.currentTime = Math.max(0, Math.min(video.duration || next, next));
+    applySpeed();
+    const step = 1 / fps;
+    const duration = Number.isFinite(video.duration) ? video.duration : Number.MAX_SAFE_INTEGER;
+    const next = Math.max(0, Math.min(duration, video.currentTime + direction * step));
+    video.currentTime = next;
+    setVideoTime(next);
+    window.setTimeout(() => setVideoTime(video.currentTime), 60);
   }
 
   return (
@@ -1002,7 +1014,18 @@ function FlightTimeTool() {
 
       {videoUrl ? (
         <div className="space-y-3">
-          <video ref={videoRef} src={videoUrl} controls playsInline className="w-full max-h-80 rounded-xl bg-black object-contain" />
+          <video
+            ref={videoRef}
+            src={videoUrl}
+            controls
+            playsInline
+            onLoadedMetadata={() => { applySpeed(); setVideoTime(videoRef.current?.currentTime || 0); }}
+            onPlay={applySpeed}
+            onPlaying={applySpeed}
+            onTimeUpdate={e => setVideoTime(e.currentTarget.currentTime)}
+            onSeeked={e => setVideoTime(e.currentTarget.currentTime)}
+            className="w-full max-h-80 rounded-xl bg-black object-contain"
+          />
           <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2">
             <div className="flex flex-wrap items-center gap-2 bg-background border border-border rounded-xl p-2">
               <span className="text-xs text-muted-foreground px-1">Slow-mo</span>
@@ -1018,10 +1041,11 @@ function FlightTimeTool() {
               </select>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => stepFrame(-1)} className="bg-secondary text-secondary-foreground rounded-xl px-4 py-2 text-sm font-black hover:bg-muted" aria-label="Previous frame">&lt;</button>
-              <button onClick={() => stepFrame(1)} className="bg-secondary text-secondary-foreground rounded-xl px-4 py-2 text-sm font-black hover:bg-muted" aria-label="Next frame">&gt;</button>
+              <button type="button" onClick={() => stepFrame(-1)} className="bg-secondary text-secondary-foreground rounded-xl px-4 py-2 text-sm font-black hover:bg-muted" aria-label="Previous frame">&lt;</button>
+              <button type="button" onClick={() => stepFrame(1)} className="bg-secondary text-secondary-foreground rounded-xl px-4 py-2 text-sm font-black hover:bg-muted" aria-label="Next frame">&gt;</button>
             </div>
           </div>
+          <p className="text-xs text-muted-foreground text-center">Current: {videoTime.toFixed(3)}s • Arrow step: {(1 / fps).toFixed(4)}s</p>
           <div className="grid grid-cols-2 gap-2">
             <button onClick={markTakeoff} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Takeoff</button>
             <button onClick={markLanding} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Landing</button>
