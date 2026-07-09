@@ -3,7 +3,7 @@ import {
   Flame, Target, Clock, TrendingUp, Plus, Minus, RotateCcw,
   Play, Pause, Check, X, ChevronLeft, Dumbbell, ArrowRight,
   LogOut, Users, Globe, Copy, ExternalLink, Search,
-  Heart, MessageCircle, Repeat2, Quote, Trash2, Video, Edit3, Activity,
+  Heart, MessageCircle, Repeat2, Quote, Trash2, Edit3, Activity,
 } from "lucide-react";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis,
@@ -308,21 +308,18 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
   profile: UserProfile; placeholder?: string; replyTo?: PostData; quotedPost?: PostData;
   onPost: (p: PostData) => void; onCancel?: () => void;
 }) {
-  const [content, setContent] = useState(""), [videoUrl, setVideoUrl] = useState(""), [showVideo, setShowVideo] = useState(false), [posting, setPosting] = useState(false);
-  const [localVideoName, setLocalVideoName] = useState("");
-  const videoId = extractYTId(videoUrl);
-  const videoOk = !!videoId || isDirectVideoUrl(videoUrl);
-  const canPost = content.trim().length > 0 || videoOk;
+  const [content, setContent] = useState(""), [posting, setPosting] = useState(false);
+  const canPost = content.trim().length > 0;
 
   async function submit() {
     if (!canPost || posting) return;
     setPosting(true);
-    const res = await apiPost("/posts", { userId: profile.userId, content: content.trim(), videoUrl: videoOk ? videoUrl : null, replyTo: replyTo?.id ?? null, quotedPostId: quotedPost?.id ?? null });
+    const res = await apiPost("/posts", { userId: profile.userId, content: content.trim(), videoUrl: null, replyTo: replyTo?.id ?? null, quotedPostId: quotedPost?.id ?? null });
     if (res?.post) {
       res.post.profile = { firstName: profile.firstName, lastName: profile.lastName, position: profile.position, avatarUrl: profile.avatarUrl, role: profile.role };
       onPost(res.post);
     }
-    setContent(""); setVideoUrl(""); setLocalVideoName(""); setShowVideo(false); setPosting(false);
+    setContent(""); setPosting(false);
   }
 
   return (
@@ -337,25 +334,9 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
         <textarea autoFocus value={content} onChange={e => setContent(e.target.value)} placeholder={placeholder} rows={3}
           className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground resize-none outline-none" />
       </div>
-      {showVideo && (
-        <div className="space-y-2">
-          <input value={videoUrl} onChange={e => setVideoUrl(e.target.value)} placeholder="Paste YouTube or direct HTTPS video link"
-            className="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary" />
-          <label className="flex items-center justify-center gap-2 border border-dashed border-border rounded-xl px-3 py-3 text-xs text-muted-foreground hover:text-primary hover:border-primary cursor-pointer">
-            <Video size={14} /> Choose from camera roll
-            <input type="file" accept="video/*" className="hidden" onChange={e => setLocalVideoName(e.target.files?.[0]?.name || "")} />
-          </label>
-          {localVideoName && <p className="text-xs text-muted-foreground">Selected: {localVideoName}. To share it with everyone, upload it first and paste the video link above.</p>}
-          {videoId ? <div className="aspect-video rounded-xl overflow-hidden bg-zinc-900"><iframe src={`https://www.youtube.com/embed/${videoId}`} title="preview" allowFullScreen className="w-full h-full" /></div>
-            : isDirectVideoUrl(videoUrl) && <div className="aspect-video rounded-xl overflow-hidden bg-zinc-900"><video src={videoUrl} controls className="w-full h-full object-contain" /></div>}
-          {videoUrl && !videoOk && <p className="text-xs text-destructive">Use a YouTube link or a direct HTTPS video link ending in .mp4, .webm, or .mov.</p>}
-        </div>
-      )}
       {quotedPost && <QuotedPost post={quotedPost} />}
       <div className="flex items-center justify-between pt-1 border-t border-border">
-        <button onClick={() => setShowVideo(v => !v)} className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-colors ${showVideo ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-primary hover:bg-primary/10"}`}>
-          <Video size={13} /> Video
-        </button>
+        <p className="text-xs text-muted-foreground">Share an update with the community.</p>
         <div className="flex gap-2">
           {onCancel && <button onClick={onCancel} className="text-xs text-muted-foreground hover:text-foreground px-3 py-1.5 rounded-lg">Cancel</button>}
           <button onClick={submit} disabled={!canPost || posting} className="bg-primary text-primary-foreground text-xs font-semibold px-4 py-1.5 rounded-lg hover:bg-accent disabled:opacity-30">
@@ -981,8 +962,14 @@ function FlightTimeTool() {
   const [videoUrl, setVideoUrl] = useState("");
   const [takeoff, setTakeoff] = useState<number | null>(null);
   const [landing, setLanding] = useState<number | null>(null);
+  const [fps, setFps] = useState(240);
+  const [speed, setSpeed] = useState(0.25);
   const flight = takeoff !== null && landing !== null && landing > takeoff ? landing - takeoff : 0;
   const vertical = flight ? verticalFromFlightTime(flight) : 0;
+
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.playbackRate = speed;
+  }, [speed, videoUrl]);
 
   function loadVideo(file?: File) {
     if (!file) return;
@@ -993,6 +980,13 @@ function FlightTimeTool() {
   }
   function markTakeoff() { if (videoRef.current) setTakeoff(videoRef.current.currentTime); }
   function markLanding() { if (videoRef.current) setLanding(videoRef.current.currentTime); }
+  function stepFrame(direction: -1 | 1) {
+    const video = videoRef.current;
+    if (!video) return;
+    video.pause();
+    const next = video.currentTime + direction / fps;
+    video.currentTime = Math.max(0, Math.min(video.duration || next, next));
+  }
 
   return (
     <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
@@ -1010,6 +1004,25 @@ function FlightTimeTool() {
       {videoUrl ? (
         <div className="space-y-3">
           <video ref={videoRef} src={videoUrl} controls playsInline className="w-full max-h-80 rounded-xl bg-black object-contain" />
+          <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2">
+            <div className="flex flex-wrap items-center gap-2 bg-background border border-border rounded-xl p-2">
+              <span className="text-xs text-muted-foreground px-1">Slow-mo</span>
+              {[0.25, 0.5, 1].map(rate => (
+                <button key={rate} onClick={() => setSpeed(rate)} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${speed === rate ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground hover:bg-muted"}`}>
+                  {rate}x
+                </button>
+              ))}
+              <select value={fps} onChange={e => setFps(Number(e.target.value))} className="ml-auto bg-secondary border border-border rounded-lg px-2 py-1.5 text-xs text-foreground outline-none">
+                <option value={60}>60 fps</option>
+                <option value={120}>120 fps</option>
+                <option value={240}>240 fps</option>
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={() => stepFrame(-1)} className="bg-secondary text-secondary-foreground rounded-xl px-4 py-2 text-sm font-black hover:bg-muted" aria-label="Previous frame">&lt;</button>
+              <button onClick={() => stepFrame(1)} className="bg-secondary text-secondary-foreground rounded-xl px-4 py-2 text-sm font-black hover:bg-muted" aria-label="Next frame">&gt;</button>
+            </div>
+          </div>
           <div className="grid grid-cols-2 gap-2">
             <button onClick={markTakeoff} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Takeoff</button>
             <button onClick={markLanding} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Landing</button>
@@ -1022,7 +1035,7 @@ function FlightTimeTool() {
         </div>
       ) : (
         <div className="border border-dashed border-border rounded-xl p-6 text-center text-sm text-muted-foreground">
-          On phone, tap Choose Video to pick from camera roll. On desktop, choose a jump video file.
+          On phone, record in slow-mo first, then tap Choose Video to pick from camera roll. Use 240 fps if your phone recorded 240 fps slow-mo.
         </div>
       )}
     </div>
