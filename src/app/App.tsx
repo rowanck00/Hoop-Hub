@@ -3,7 +3,7 @@ import {
   Flame, Target, Clock, TrendingUp, Plus, Minus, RotateCcw,
   Play, Pause, Check, X, ChevronLeft, Dumbbell, ArrowRight,
   LogOut, Users, Globe, Copy, ExternalLink, Search,
-  Heart, MessageCircle, Repeat2, Quote, Trash2, Video, Edit3, Activity,
+  Heart, MessageCircle, Repeat2, Trash2, Video, Edit3, Activity,
 } from "lucide-react";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis,
@@ -131,8 +131,7 @@ function elasticCheck(base: number, next: number, label: string) {
 }
 function est1rm(weight: number, reps: number) {
   if (reps <= 1) return Math.round(weight);
-  if (reps <= 10) return Math.round(weight * (36 / (37 - reps)));
-  return Math.round(weight * (1 + reps / 30));
+  return Math.round(weight * (1 + reps / 40));
 }
 function uploadPathName(name: string, fallback: string) {
   const ext = (name.split(".").pop() || fallback).toLowerCase().replace(/[^a-z0-9]/g, "") || fallback;
@@ -140,10 +139,10 @@ function uploadPathName(name: string, fallback: string) {
 }
 function defaultWorkoutPlan(): WorkoutBlock[] {
   return [
-    { id: crypto.randomUUID(), activity: "Ball Handling", minutes: 15, notes: "" },
-    { id: crypto.randomUUID(), activity: "Shooting", minutes: 45, notes: "" },
-    { id: crypto.randomUUID(), activity: "Finishing", minutes: 15, notes: "" },
-    { id: crypto.randomUUID(), activity: "Free Throws", minutes: 10, notes: "" },
+    { id: crypto.randomUUID(), activity: "Ball Handling", minutes: 15 },
+    { id: crypto.randomUUID(), activity: "Shooting", minutes: 45 },
+    { id: crypto.randomUUID(), activity: "Finishing", minutes: 15 },
+    { id: crypto.randomUUID(), activity: "Free Throws", minutes: 10 },
   ];
 }
 async function workoutNotify(title: string, body: string) {
@@ -182,12 +181,12 @@ function initials(p?: MiniProfile | null) { return p ? `${p.firstName?.[0] ?? ""
 
 // ─── Rank system ──────────────────────────────────────────────────────────────
 const RANKS = [
-  { label: "Elite",    hours: 2500, color: "#a855f7", emoji: "💎" },
-  { label: "Platinum", hours: 1000, color: "#60a5fa", emoji: "🏆" },
-  { label: "Gold",     hours: 500,  color: "#f59e0b", emoji: "🥇" },
-  { label: "Silver",   hours: 250,  color: "#94a3b8", emoji: "🥈" },
-  { label: "Bronze",   hours: 100,  color: "#c97c3a", emoji: "🥉" },
-  { label: "Rookie",   hours: 0,    color: "#8a8680", emoji: "🏀" },
+  { label: "Elite",    hours: 2500, color: "#a855f7" },
+  { label: "Platinum", hours: 1000, color: "#60a5fa" },
+  { label: "Gold",     hours: 500,  color: "#f59e0b" },
+  { label: "Silver",   hours: 250,  color: "#94a3b8" },
+  { label: "Bronze",   hours: 100,  color: "#c97c3a" },
+  { label: "Rookie",   hours: 0,    color: "#8a8680" },
 ];
 function getRank(totalMinutes: number) {
   const hours = totalMinutes / 60;
@@ -346,10 +345,10 @@ const QuotedPost = ({ post }: { post: PostData }) => (
 );
 
 // ─── Post Card ────────────────────────────────────────────────────────────────
-function PostCard({ post, currentUserId, currentUserName, canModerate = false, onReply, onQuote, onUpdate, onDelete, isReply = false }: {
+function PostCard({ post, currentUserId, currentUserName, canModerate = false, onReply, onUpdate, onDelete, isReply = false }: {
   post: PostData; currentUserId?: string; currentUserName?: string;
   canModerate?: boolean;
-  onReply: (p: PostData) => void; onQuote: (p: PostData) => void;
+  onReply: (p: PostData) => void;
   onUpdate: (p: PostData) => void; onDelete: (id: string) => void; isReply?: boolean;
 }) {
   const [showReplies, setShowReplies] = useState(false);
@@ -378,12 +377,13 @@ function PostCard({ post, currentUserId, currentUserName, canModerate = false, o
   }
   async function handleReport() {
     if (!currentUserId) return;
+    setReportMsg("Sending report...");
     const res = await apiPost(`/posts/${post.id}/report`, { userId: currentUserId, reason: "Reported in app" });
     if (res?.ok) {
       setReported(true);
-      setReportMsg(res.adminCount > 0 ? "Sent to admins for review." : "Report saved. No admin profile was found yet.");
+      setReportMsg(res.adminCount > 0 ? "Sent to admins for review." : "Report saved for admin review.");
     } else {
-      setReportMsg(res?.error || "Report could not be sent. Try again.");
+      setReportMsg(res?.error ? `Report failed: ${res.error}` : "Report could not be sent. Make sure the Supabase function is redeployed.");
     }
   }
   async function handleBlock() {
@@ -423,9 +423,6 @@ function PostCard({ post, currentUserId, currentUserName, canModerate = false, o
         <button onClick={handleRepost} disabled={!currentUserId} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors ${reposted ? "text-green-400 bg-green-400/10" : "text-muted-foreground hover:text-green-400 hover:bg-green-400/10"} disabled:cursor-not-allowed`}>
           <Repeat2 size={13} />{post.repostCount > 0 && <span>{post.repostCount}</span>}
         </button>
-        <button onClick={() => onQuote(post)} disabled={!currentUserId} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors disabled:cursor-not-allowed">
-          <Quote size={13} />
-        </button>
         <button onClick={handleReport} disabled={!currentUserId || reported} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-amber-400 hover:bg-amber-400/10 disabled:cursor-not-allowed">{reported ? "Reported" : "Report"}</button>
         {currentUserId && currentUserId !== post.userId && <button onClick={handleBlock} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10">Block</button>}
         {post.replyCount > 0 && !isReply && (
@@ -437,7 +434,7 @@ function PostCard({ post, currentUserId, currentUserName, canModerate = false, o
       {reportMsg && <p className="text-xs text-muted-foreground bg-secondary border border-border rounded-xl px-3 py-2">{reportMsg}</p>}
       {showReplies && replies.length > 0 && (
         <div className="space-y-3 pt-1">
-          {replies.map(r => <PostCard key={r.id} post={r} currentUserId={currentUserId} currentUserName={currentUserName} canModerate={canModerate} onReply={onReply} onQuote={onQuote}
+          {replies.map(r => <PostCard key={r.id} post={r} currentUserId={currentUserId} currentUserName={currentUserName} canModerate={canModerate} onReply={onReply}
             onUpdate={u => setReplies(prev => prev.map(p => p.id === u.id ? u : p))}
             onDelete={id => setReplies(prev => prev.filter(p => p.id !== id))} isReply />)}
         </div>
@@ -447,8 +444,8 @@ function PostCard({ post, currentUserId, currentUserName, canModerate = false, o
 }
 
 // ─── Compose Box ──────────────────────────────────────────────────────────────
-function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, quotedPost, onPost, onCancel }: {
-  profile: UserProfile; placeholder?: string; replyTo?: PostData; quotedPost?: PostData;
+function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, onPost, onCancel }: {
+  profile: UserProfile; placeholder?: string; replyTo?: PostData;
   onPost: (p: PostData) => void; onCancel?: () => void;
 }) {
   const [content, setContent] = useState(""), [posting, setPosting] = useState(false);
@@ -475,7 +472,7 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
     setVideoError("");
     try {
       const uploadedVideoUrl = videoFile ? await uploadCommunityVideo(profile.userId, videoFile) : null;
-      const res = await apiPost("/posts", { userId: profile.userId, content: content.trim(), videoUrl: uploadedVideoUrl, replyTo: replyTo?.id ?? null, quotedPostId: quotedPost?.id ?? null });
+      const res = await apiPost("/posts", { userId: profile.userId, content: content.trim(), videoUrl: uploadedVideoUrl, replyTo: replyTo?.id ?? null });
       if (res?.post) {
         res.post.profile = { firstName: profile.firstName, lastName: profile.lastName, position: profile.position, avatarUrl: profile.avatarUrl, role: profile.role };
         onPost(res.post);
@@ -492,9 +489,9 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
 
   return (
     <div className="bg-card border border-border rounded-2xl p-3 sm:p-4 space-y-3 max-w-full overflow-hidden">
-      {(replyTo || quotedPost) && (
+      {replyTo && (
         <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-          {replyTo ? <><MessageCircle size={11} /> Replying to <strong className="text-foreground">{replyTo.profile?.firstName}</strong></> : <><Quote size={11} /> Quoting <strong className="text-foreground">{quotedPost?.profile?.firstName}</strong></>}
+          <MessageCircle size={11} /> Replying to <strong className="text-foreground">{replyTo.profile?.firstName}</strong>
         </p>
       )}
       <div className="flex gap-3 min-w-0">
@@ -509,7 +506,6 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
         </div>
       )}
       {videoError && <p className="text-xs text-amber-400 bg-amber-400/10 rounded-xl p-3">{videoError}</p>}
-      {quotedPost && <QuotedPost post={quotedPost} />}
       <div className="flex items-center justify-between gap-2 pt-1 border-t border-border flex-wrap">
         <label className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 cursor-pointer">
           <Video size={13} /> Video
@@ -531,7 +527,6 @@ function FeedTab({ currentUserId, currentProfile }: { currentUserId?: string; cu
   const [posts, setPosts] = useState<PostData[]>([]);
   const [loading, setLoading] = useState(true);
   const [replyTarget, setReplyTarget] = useState<PostData | null>(null);
-  const [quoteTarget, setQuoteTarget] = useState<PostData | null>(null);
   const currentUserName = currentProfile ? `${currentProfile.firstName} ${currentProfile.lastName}`.trim() : undefined;
   const canModerate = isAdmin(currentProfile);
 
@@ -543,16 +538,14 @@ function FeedTab({ currentUserId, currentProfile }: { currentUserId?: string; cu
 
   return (
     <div className="space-y-4">
-      {currentProfile && !replyTarget && !quoteTarget && <ComposeBox profile={currentProfile} onPost={addPost} />}
+      {currentProfile && !replyTarget && <ComposeBox profile={currentProfile} onPost={addPost} />}
       {replyTarget && currentProfile && <ComposeBox profile={currentProfile} placeholder={`Reply to ${replyTarget.profile?.firstName}…`} replyTo={replyTarget} onPost={p => { addPost(p); setReplyTarget(null); }} onCancel={() => setReplyTarget(null)} />}
-      {quoteTarget && currentProfile && <ComposeBox profile={currentProfile} placeholder="Add your thoughts…" quotedPost={quoteTarget} onPost={p => { addPost(p); setQuoteTarget(null); }} onCancel={() => setQuoteTarget(null)} />}
       {!currentProfile && <div className="bg-card border border-border rounded-2xl p-4 text-center text-sm text-muted-foreground">Sign in to post, like, and reply.</div>}
       {loading ? <div className="text-center py-12 text-muted-foreground text-sm">Loading feed…</div>
         : posts.length === 0 ? <div className="text-center py-12 text-muted-foreground"><MessageCircle size={40} className="mx-auto mb-3 opacity-20" /><p className="text-sm">No posts yet. Be the first!</p></div>
         : <div className="space-y-3">{posts.map(post => (
           <PostCard key={post.id} post={post} currentUserId={currentUserId} currentUserName={currentUserName} canModerate={canModerate}
-            onReply={p => { setQuoteTarget(null); setReplyTarget(p); }}
-            onQuote={p => { setReplyTarget(null); setQuoteTarget(p); }}
+            onReply={p => setReplyTarget(p)}
             onUpdate={u => setPosts(prev => prev.map(p => p.id === u.id ? u : p))}
             onDelete={id => setPosts(prev => prev.filter(p => p.id !== id))} />
         ))}</div>}
@@ -596,7 +589,7 @@ function PlayersTab({ onSelect }: { onSelect: (p: CommunityPlayer) => void }) {
               ))}
             </div>
             <div className="px-5 pb-4 flex items-center justify-between">
-              <span className="text-xs font-medium" style={{ color: getRank(player.summary.totalMinutes).color }}>{getRank(player.summary.totalMinutes).emoji} {getRank(player.summary.totalMinutes).label}</span>
+              <span className="text-xs font-medium" style={{ color: getRank(player.summary.totalMinutes).color }}>{getRank(player.summary.totalMinutes).label}</span>
               <ArrowRight size={14} className="text-muted-foreground group-hover:text-primary" />
             </div>
           </div>
@@ -709,9 +702,9 @@ function TeamsTab({ currentUserId, currentProfile }: { currentUserId?: string; c
                         <div className="flex items-center gap-2 flex-wrap">
                           <h3 className="font-black text-base" style={{ fontFamily: "'Roboto Slab',serif" }}>{team.name}</h3>
                           <span className="bg-primary/20 text-primary text-xs font-semibold px-2 py-0.5 rounded-lg">{team.level}</span>
-                          {isMember && <span className="bg-green-400/20 text-green-400 text-xs font-semibold px-2 py-0.5 rounded-lg">✓ Member</span>}
+                          {isMember && <span className="bg-green-400/20 text-green-400 text-xs font-semibold px-2 py-0.5 rounded-lg">Member</span>}
                         </div>
-                        {team.location && <p className="text-xs text-muted-foreground mt-0.5">📍 {team.location}</p>}
+                        {team.location && <p className="text-xs text-muted-foreground mt-0.5">{team.location}</p>}
                         {team.description && <p className="text-sm text-muted-foreground mt-1">{team.description}</p>}
                         <p className="text-xs text-muted-foreground mt-1">{team.members.length} member{team.members.length !== 1 ? "s" : ""} · Created by {isCreator ? "you" : team.creatorName}</p>
                       </div>
@@ -761,7 +754,7 @@ function NotifPanel({ userId, onClose }: { userId: string; onClose: () => void }
     markNotifsRead(userId).catch(() => {});
   }, [userId]);
 
-  const icons: Record<string, string> = { like: "❤️", repost: "🔄", reply: "💬", follow: "👤", tag: "🏷️" };
+  const labels: Record<string, string> = { like: "Like", repost: "Repost", reply: "Reply", follow: "Follow", tag: "Tag", report: "Report", message: "Message" };
   async function turnOnPush() {
     setPushMsg("Setting up this device...");
     const res = await enablePushNotifications(userId);
@@ -792,7 +785,7 @@ function NotifPanel({ userId, onClose }: { userId: string; onClose: () => void }
             <div className="divide-y divide-border">
               {notifs.map(n => (
                 <div key={n.id} className={`px-5 py-4 flex items-start gap-3 ${!n.read ? "bg-primary/5" : ""}`}>
-                  <span className="text-xl flex-shrink-0">{icons[n.type] || "🔔"}</span>
+                  <span className="text-[10px] uppercase tracking-wider text-primary bg-primary/10 rounded-lg px-2 py-1 flex-shrink-0">{labels[n.type] || "Notice"}</span>
                   <div>
                     <p className="text-sm">{n.message}</p>
                     <p className="text-xs text-muted-foreground mt-0.5">{timeAgo(n.createdAt)}</p>
@@ -851,7 +844,7 @@ function CommunityPage({ currentUserId, currentProfile, onBack }: { currentUserI
     <div className="min-h-screen bg-background" style={{ fontFamily: "'DM Sans',sans-serif" }}>
       <header className="border-b border-border px-4 sm:px-6 py-5 max-w-5xl mx-auto flex items-center gap-3 min-w-0">
         {onBack && <button onClick={onBack} className="text-muted-foreground hover:text-foreground"><ChevronLeft size={20} /></button>}
-        <span className="text-2xl">🏀</span>
+        <Target size={24} className="text-primary flex-shrink-0" />
         <div className="min-w-0"><h1 className="text-xl font-black tracking-tight leading-none" style={{ fontFamily: "'Roboto Slab',serif" }}>COMMUNITY</h1><p className="text-xs text-muted-foreground uppercase tracking-widest break-words">Players · Teams · Coaches · Scouts</p></div>
       </header>
       <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-5 overflow-x-hidden">
@@ -892,7 +885,7 @@ function PlayerProfileView({ player, onBack, currentUserId, currentUserName }: {
       <header className="border-b border-border px-6 py-5 max-w-5xl mx-auto flex items-center justify-between">
         <div className="flex items-center gap-3">
           {onBack && <button onClick={onBack} className="text-muted-foreground hover:text-foreground"><ChevronLeft size={20} /></button>}
-          <span className="text-2xl">🏀</span>
+          <Target size={24} className="text-primary flex-shrink-0" />
           <div><h1 className="text-xl font-black leading-none" style={{ fontFamily: "'Roboto Slab',serif" }}>{p.firstName.toUpperCase()} {p.lastName.toUpperCase()}</h1><p className="text-xs text-muted-foreground uppercase tracking-widest">Player Profile</p></div>
         </div>
         <div className="flex items-center gap-2">
@@ -917,8 +910,8 @@ function PlayerProfileView({ player, onBack, currentUserId, currentUserName }: {
           </div>
           {(p.strengths || p.weaknesses) && (
             <div className="px-6 py-4 border-t border-border grid grid-cols-2 gap-4">
-              {p.strengths && <div><p className="text-xs text-primary uppercase tracking-wider font-semibold mb-1">💪 Strengths</p><p className="text-sm text-muted-foreground">{p.strengths}</p></div>}
-              {p.weaknesses && <div><p className="text-xs text-amber-400 uppercase tracking-wider font-semibold mb-1">🎯 Areas to Improve</p><p className="text-sm text-muted-foreground">{p.weaknesses}</p></div>}
+              {p.strengths && <div><p className="text-xs text-primary uppercase tracking-wider font-semibold mb-1">Strengths</p><p className="text-sm text-muted-foreground">{p.strengths}</p></div>}
+              {p.weaknesses && <div><p className="text-xs text-amber-400 uppercase tracking-wider font-semibold mb-1">Areas to Improve</p><p className="text-sm text-muted-foreground">{p.weaknesses}</p></div>}
             </div>
           )}
           {(p.height || p.weight || p.wingspan || p.vertical) && (
@@ -1020,7 +1013,7 @@ function LoginScreen() {
       <div className="relative w-full max-w-sm flex flex-col gap-6">
         {/* Logo */}
         <div className="flex flex-col items-center gap-3 text-center">
-          <span className="text-6xl">🏀</span>
+          <Target size={54} className="text-primary mx-auto" />
           <div>
             <h1 className="text-4xl font-black tracking-tight" style={{ fontFamily: "'Roboto Slab',serif" }}>{APP_NAME}</h1>
             <p className="text-muted-foreground mt-1 text-sm">{APP_TAGLINE}</p>
@@ -1056,7 +1049,7 @@ function LoginScreen() {
             )}
             <button type="submit" disabled={loading}
               className="w-full bg-primary text-primary-foreground font-bold py-3 rounded-xl hover:bg-accent transition-colors disabled:opacity-40 text-sm mt-1">
-              {loading ? "Please wait…" : mode === "signin" ? "Sign In →" : "Create Account 🏀"}
+              {loading ? "Please wait…" : mode === "signin" ? "Sign In" : "Create Account"}
             </button>
           </form>
           <p className="text-xs text-center text-muted-foreground mt-4">
@@ -1095,7 +1088,7 @@ function ProfileSetup({ userId, email, onComplete }: { userId: string; email: st
   return (
     <div className="min-h-screen bg-background flex items-center justify-center px-6 py-12" style={{ fontFamily: "'DM Sans',sans-serif" }}>
       <div className="w-full max-w-lg">
-        <div className="text-center mb-8"><span className="text-4xl">🏀</span><h1 className="text-2xl font-black mt-3" style={{ fontFamily: "'Roboto Slab',serif" }}>Set Up Your Profile</h1><p className="text-muted-foreground text-sm mt-1">Coaches and scouts can discover you on the community board.</p></div>
+        <div className="text-center mb-8"><Target size={38} className="text-primary mx-auto" /><h1 className="text-2xl font-black mt-3" style={{ fontFamily: "'Roboto Slab',serif" }}>Set Up Your Profile</h1><p className="text-muted-foreground text-sm mt-1">Coaches and scouts can discover you on the community board.</p></div>
         <form onSubmit={submit} className="bg-card border border-border rounded-2xl p-6 flex flex-col gap-5">
           <div className="grid grid-cols-2 gap-3">
             <div><label className={lbl}>First Name *</label><input autoFocus value={form.firstName} onChange={e => set("firstName", e.target.value)} placeholder="First name" className={cls} required /></div>
@@ -1126,7 +1119,7 @@ function ProfileSetup({ userId, email, onComplete }: { userId: string; email: st
             <div><p className="text-sm font-medium">Visible on Community Board</p><p className="text-xs text-muted-foreground">Coaches and scouts can see your profile</p></div>
           </label>
           <button type="submit" disabled={!form.firstName.trim() || !form.lastName.trim()} className="bg-primary text-primary-foreground font-semibold py-3 rounded-xl hover:bg-accent disabled:opacity-40">
-            Let&apos;s Go 🏀
+            Continue
           </button>
         </form>
       </div>
@@ -1542,7 +1535,7 @@ function WorkoutPlanner({ data, onUpdate }: { data: AppData; onUpdate: (d: AppDa
   const pct = totalSec ? Math.min(100, Math.round((completedSec / totalSec) * 100)) : 0;
   const totalLeft = Math.max(0, remaining + plan.slice(idx + 1).reduce((a,b)=>a + b.minutes * 60, 0));
   const setBlock = (id: string, patch: Partial<WorkoutBlock>) => onUpdate({ ...data, workoutPlan: plan.map(b => b.id === id ? { ...b, ...patch } : b) });
-  const addBlock = () => onUpdate({ ...data, workoutPlan: [...plan, { id: crypto.randomUUID(), activity: "New Drill", minutes: 10, notes: "" }] });
+  const addBlock = () => onUpdate({ ...data, workoutPlan: [...plan, { id: crypto.randomUUID(), activity: "New Drill", minutes: 10 }] });
   const removeBlock = (id: string) => onUpdate({ ...data, workoutPlan: plan.filter(b => b.id !== id) });
   function startBlock(i: number) {
     const sec = Math.max(1, (plan[i]?.minutes || 0) * 60);
@@ -1597,9 +1590,9 @@ function WorkoutPlanner({ data, onUpdate }: { data: AppData; onUpdate: (d: AppDa
   return (
     <div className="bg-card border border-border rounded-2xl p-6 space-y-5">
       <div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-wider text-muted-foreground">Today's Workout</p><p className="text-sm text-muted-foreground">{Math.round(totalSec/60)} min planned</p></div>{!active&&<button onClick={startWorkout} className="bg-primary text-primary-foreground rounded-xl px-4 py-2 text-sm font-semibold">Start Workout</button>}</div>
-      {!active && <div className="space-y-2">{plan.map(b=><div key={b.id} className="grid grid-cols-1 md:grid-cols-[1.4fr_.6fr_1.5fr_auto] gap-2"><input value={b.activity} onChange={e=>setBlock(b.id,{activity:e.target.value})} className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none"/><input value={b.minutes} onChange={e=>setBlock(b.id,{minutes:Number(e.target.value)||0})} type="number" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none"/><input value={b.notes||""} onChange={e=>setBlock(b.id,{notes:e.target.value})} placeholder="Notes" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none"/><button onClick={()=>removeBlock(b.id)} className="text-muted-foreground hover:text-destructive px-3">Delete</button></div>)}<button onClick={addBlock} className="text-sm text-primary font-semibold">Add Block</button></div>}
+      {!active && <div className="space-y-2">{plan.map(b=><div key={b.id} className="grid grid-cols-1 md:grid-cols-[1.4fr_.6fr_auto] gap-2"><input value={b.activity} onChange={e=>setBlock(b.id,{activity:e.target.value})} className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none"/><input value={b.minutes} onChange={e=>setBlock(b.id,{minutes:Number(e.target.value)||0})} type="number" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none"/><button onClick={()=>removeBlock(b.id)} className="text-muted-foreground hover:text-destructive px-3">Delete</button></div>)}<button onClick={addBlock} className="text-sm text-primary font-semibold">Add Block</button></div>}
       {active && current && <div className="space-y-4">
-        <div className="bg-background border border-border rounded-xl p-5 text-center"><p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Current Drill</p><p className="text-2xl font-black text-primary">{current.activity}</p><p className="text-6xl font-black tabular-nums mt-3" style={{fontFamily:"'DM Mono',monospace"}}>{formatTime(remaining)}</p>{current.notes&&<p className="text-sm text-muted-foreground mt-2">{current.notes}</p>}</div>
+        <div className="bg-background border border-border rounded-xl p-5 text-center"><p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Current Drill</p><p className="text-2xl font-black text-primary">{current.activity}</p><p className="text-6xl font-black tabular-nums mt-3" style={{fontFamily:"'DM Mono',monospace"}}>{formatTime(remaining)}</p></div>
         <div className="h-2 bg-muted rounded-full overflow-hidden"><div className="h-full bg-primary rounded-full transition-all" style={{width:`${pct}%`}} /></div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm"><div><p className="text-muted-foreground">Next</p><p>{next?.activity || "Finish"}</p></div><div><p className="text-muted-foreground">Total Left</p><p>{formatTime(totalLeft)}</p></div><div><p className="text-muted-foreground">Completed</p><p>{pct}%</p></div><div><p className="text-muted-foreground">Block</p><p>{idx + 1} / {plan.length}</p></div></div>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-2"><button onClick={togglePause} className="bg-secondary rounded-xl py-2 text-sm font-semibold">{paused ? "Resume" : "Pause"}</button><button onClick={skip} className="bg-secondary rounded-xl py-2 text-sm font-semibold">Skip Drill</button><button onClick={addTime} className="bg-secondary rounded-xl py-2 text-sm font-semibold">+5 Min</button><button onClick={()=>void finishWorkout(true)} className="bg-secondary rounded-xl py-2 text-sm font-semibold text-destructive">End Early</button></div>
@@ -1661,9 +1654,9 @@ function TrainingView({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData
 
 // ─── Strength View ────────────────────────────────────────────────────────────
 function StrengthView({ data, onUpdate, userId }: { data: AppData; onUpdate: (d: AppData) => void; userId: string }) {
-  const [sel, setSel] = useState(0), [adding, setAdding] = useState(false), [wt, setWt] = useState(""), [rp, setRp] = useState(""), [note, setNote] = useState(""), [prVideo, setPrVideo] = useState<File | null>(null), [addEx, setAddEx] = useState(false), [exName, setExName] = useState("");
+  const [sel, setSel] = useState(0), [adding, setAdding] = useState(false), [wt, setWt] = useState(""), [rp, setRp] = useState(""), [prVideo, setPrVideo] = useState<File | null>(null), [addEx, setAddEx] = useState(false), [exName, setExName] = useState("");
   const ex = data.strength[Math.min(sel, data.strength.length-1)];
-  const saveEntry = async () => { const w=parseFloat(wt),r=parseInt(rp); if(!w||!r)return; const videoUrl = prVideo ? await uploadUserAsset("pr-videos", userId, prVideo, "mp4").catch(()=>"") : ""; onUpdate({...data,strength:data.strength.map((e,i)=>i===sel?{...e,history:[...e.history,{date:new Date().toISOString().slice(0,10),weight:w,reps:r,est1rm:est1rm(w,r),notes:note.trim(),videoUrl}]}:e)}); setWt(""); setRp(""); setNote(""); setPrVideo(null); setAdding(false); };
+  const saveEntry = async () => { const w=parseFloat(wt),r=parseInt(rp); if(!w||!r)return; const videoUrl = prVideo ? await uploadUserAsset("pr-videos", userId, prVideo, "mp4").catch(()=>"") : ""; onUpdate({...data,strength:data.strength.map((e,i)=>i===sel?{...e,history:[...e.history,{date:new Date().toISOString().slice(0,10),weight:w,reps:r,est1rm:est1rm(w,r),videoUrl}]}:e)}); setWt(""); setRp(""); setPrVideo(null); setAdding(false); };
   const saveEx = () => { if(!exName.trim())return; const nd={...data,strength:[...data.strength,{name:exName.trim(),unit:"lbs" as const,history:[]}]}; onUpdate(nd); setSel(nd.strength.length-1); setExName(""); setAddEx(false); };
   const graphData = ex.history.map(h=>({date:shortDate(h.date),weight:h.weight,est1rm:h.est1rm || est1rm(h.weight,h.reps)}));
   const best = ex.history.length?Math.max(...ex.history.map(h=>h.weight)):0;
@@ -1686,12 +1679,12 @@ function StrengthView({ data, onUpdate, userId }: { data: AppData; onUpdate: (d:
       :<div className="bg-card border border-border rounded-2xl p-8 text-center text-muted-foreground text-sm">Log at least 2 sessions to see your chart.</div>}
       <div className="bg-card border border-border rounded-2xl p-6">
         <div className="flex items-center justify-between mb-4"><span className="text-xs uppercase tracking-wider text-muted-foreground">History</span>{!adding&&<button onClick={()=>setAdding(true)} className="flex items-center gap-1.5 bg-primary text-primary-foreground text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-accent"><Plus size={12}/> Log today</button>}</div>
-        {adding&&(<div className="grid md:grid-cols-[1fr_1fr_2fr_auto] gap-3 mb-4 p-3 bg-secondary rounded-xl"><div><label className="text-xs text-muted-foreground block mb-1">Weight ({ex.unit})</label><input autoFocus value={wt} onChange={e=>setWt(e.target.value)} type="number" placeholder="225" className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm outline-none"/></div><div><label className="text-xs text-muted-foreground block mb-1">Reps</label><input value={rp} onChange={e=>setRp(e.target.value)} type="number" placeholder="5" className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm outline-none"/></div><div><label className="text-xs text-muted-foreground block mb-1">Notes / PR video</label><input value={note} onChange={e=>setNote(e.target.value)} placeholder="Notes" className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm outline-none mb-2"/><input type="file" accept="video/*" onChange={e=>setPrVideo(e.target.files?.[0]||null)} className="text-xs w-full"/></div><div className="flex gap-2 items-end"><button onClick={saveEntry} className="bg-primary text-primary-foreground rounded-lg p-3 hover:bg-accent"><Check size={15}/></button><button onClick={()=>setAdding(false)} className="bg-muted rounded-lg p-3"><X size={15}/></button></div></div>)}
+        {adding&&(<div className="grid md:grid-cols-[1fr_1fr_1.4fr_auto] gap-3 mb-4 p-3 bg-secondary rounded-xl"><div><label className="text-xs text-muted-foreground block mb-1">Weight ({ex.unit})</label><input autoFocus value={wt} onChange={e=>setWt(e.target.value)} type="number" placeholder="225" className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm outline-none"/></div><div><label className="text-xs text-muted-foreground block mb-1">Reps</label><input value={rp} onChange={e=>setRp(e.target.value)} type="number" placeholder="5" className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm outline-none"/></div><div><label className="text-xs text-muted-foreground block mb-1">PR video</label><label className="flex items-center justify-center gap-2 w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm cursor-pointer hover:border-primary"><Video size={14}/>{prVideo ? prVideo.name : "Choose video"}<input type="file" accept="video/*" onChange={e=>setPrVideo(e.target.files?.[0]||null)} className="hidden"/></label></div><div className="flex gap-2 items-end"><button onClick={saveEntry} className="bg-primary text-primary-foreground rounded-lg p-3 hover:bg-accent"><Check size={15}/></button><button onClick={()=>{setAdding(false);setPrVideo(null);}} className="bg-muted rounded-lg p-3"><X size={15}/></button></div></div>)}
         {ex.history.length===0?<p className="text-muted-foreground text-sm text-center py-4">No entries yet.</p>:(<div>{[...ex.history].reverse().map((h,i)=>(<div key={i} className="flex justify-between items-center py-2 border-b border-border last:border-0"><span className="text-sm text-muted-foreground">{shortDate(h.date)}</span><div className="flex gap-4"><span className="text-sm">{h.reps} reps</span><span className="text-sm font-semibold text-primary">{h.weight} {ex.unit}</span></div></div>))}</div>)}
       </div>
       <div className="bg-card border border-border rounded-2xl p-6">
         <p className="text-xs uppercase tracking-wider text-muted-foreground mb-4">Estimated 1RM History</p>
-        {ex.history.length===0?<p className="text-muted-foreground text-sm">No PRs yet.</p>:<div className="space-y-3">{[...ex.history].reverse().map((h,i)=><div key={i} className="border-b border-border pb-3 last:border-0"><div className="flex flex-wrap justify-between gap-2 text-sm"><span>{shortDate(h.date)} - {h.weight} x {h.reps}</span><span className="text-primary font-semibold">Estimated 1RM {h.est1rm || est1rm(h.weight,h.reps)} {ex.unit}</span></div>{h.notes&&<p className="text-xs text-muted-foreground mt-1">{h.notes}</p>}{h.videoUrl&&<video src={h.videoUrl} controls className="mt-2 w-full max-h-56 rounded-xl bg-black object-contain"/>}</div>)}</div>}
+        {ex.history.length===0?<p className="text-muted-foreground text-sm">No PRs yet.</p>:<div className="space-y-3">{[...ex.history].reverse().map((h,i)=><div key={i} className="border-b border-border pb-3 last:border-0"><div className="flex flex-wrap justify-between gap-2 text-sm"><span>{shortDate(h.date)} - {h.weight} x {h.reps}</span><span className="text-primary font-semibold">Estimated 1RM {h.est1rm || est1rm(h.weight,h.reps)} {ex.unit}</span></div>{h.videoUrl&&<video src={h.videoUrl} controls className="mt-2 w-full max-h-56 rounded-xl bg-black object-contain"/>}</div>)}</div>}
       </div>
     </div>
   );
@@ -1816,6 +1809,11 @@ export default function App() {
   const urlParams = new URLSearchParams(window.location.search);
   const playerIdParam = urlParams.get("player");
   const viewParam = urlParams.get("view");
+
+  useEffect(() => {
+    const orientation = screen.orientation as ScreenOrientation & { lock?: (orientation: OrientationLockType) => Promise<void> };
+    orientation?.lock?.("portrait").catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (playerIdParam) {
@@ -2021,7 +2019,7 @@ export default function App() {
   if (viewParam === "community") return <CommunityPage currentUserId={userId ?? undefined} currentProfile={profile} />;
 
   // Auth states
-  if (authState === "loading") return <div className="min-h-screen bg-background flex items-center justify-center"><div className="flex flex-col items-center gap-4"><span className="text-4xl animate-bounce">🏀</span><p className="text-muted-foreground text-sm">Loading…</p></div></div>;
+  if (authState === "loading") return <div className="min-h-screen bg-background flex items-center justify-center"><div className="flex flex-col items-center gap-4"><Activity size={38} className="text-primary animate-pulse" /><p className="text-muted-foreground text-sm">Loading…</p></div></div>;
   if (authState === "unauthenticated") return <LoginScreen />;
   if (authState === "needs_profile" && userId) return <ProfileSetup userId={userId} email={userEmail} onComplete={handleProfileComplete} />;
   if (!profile) return null;
@@ -2050,7 +2048,7 @@ export default function App() {
       <header className="border-b border-border px-6 py-5 flex items-center justify-between max-w-5xl mx-auto">
         <div className="flex items-center gap-3">
           {view!=="home"&&<button onClick={()=>setView("home")} className="mr-1 text-muted-foreground hover:text-foreground"><ChevronLeft size={20}/></button>}
-          <span className="text-2xl">🏀</span>
+          <Target size={24} className="text-primary flex-shrink-0" />
           <div><h1 className="text-xl font-black tracking-tight leading-none" style={{fontFamily:"'Roboto Slab',serif"}}>{profile.firstName.toUpperCase()} {profile.lastName.toUpperCase()}</h1><p className="text-xs text-muted-foreground uppercase tracking-widest">{viewLabels[view]}</p></div>
         </div>
         <div className="flex items-center gap-3">
@@ -2086,7 +2084,7 @@ export default function App() {
           {/* Rank card */}
           <div className="bg-card border border-border rounded-2xl px-6 py-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <span className="text-3xl">{rank.emoji}</span>
+              <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center"><TrendingUp size={18} className="text-primary" /></div>
               <div>
                 <p className="font-black text-lg leading-none" style={{ color: rank.color, fontFamily: "'Roboto Slab',serif" }}>{rank.label}</p>
                 <p className="text-xs text-muted-foreground">{Math.round(totalMinutes / 60)} hrs total</p>
@@ -2094,13 +2092,13 @@ export default function App() {
             </div>
             {nextRank ? (
               <div className="text-right">
-                <p className="text-xs text-muted-foreground">Next: {nextRank.emoji} {nextRank.label}</p>
+                <p className="text-xs text-muted-foreground">Next: {nextRank.label}</p>
                 <p className="text-xs text-muted-foreground">{Math.max(0, Math.round(nextRank.hours - totalMinutes / 60))} hrs to go</p>
                 <div className="h-1.5 w-28 bg-muted rounded-full overflow-hidden mt-1.5">
                   <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(100, ((totalMinutes / 60 - rank.hours) / (nextRank.hours - rank.hours)) * 100)}%`, background: rank.color }} />
                 </div>
               </div>
-            ) : <p className="text-xs text-primary font-semibold">Max Rank! 💎</p>}
+            ) : <p className="text-xs text-primary font-semibold">Max Rank</p>}
           </div>
 
           {/* Measurables with edit */}
@@ -2197,7 +2195,7 @@ export default function App() {
               </button>
             ))}
           </div>
-          <p className="text-center text-xs text-muted-foreground pb-4">Keep going, {profile.firstName}! 🏀</p>
+          <p className="text-center text-xs text-muted-foreground pb-4">Keep going, {profile.firstName}.</p>
         </>}
       </main>
     </div>
