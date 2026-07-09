@@ -64,6 +64,14 @@ function cleanImageUrl(value: unknown) {
     return "";
   }
 }
+const BANNED_WORDS = ["fuck", "shit", "bitch", "asshole", "nigger", "faggot"];
+function hasBannedWords(value: unknown) {
+  const text = String(value || "").toLowerCase();
+  return BANNED_WORDS.some(w => new RegExp(`\\b${w}\\b`, "i").test(text));
+}
+async function getBlocked(userId?: string) {
+  return userId ? ((await kv.get(`blocked_${userId}`)) || []) : [];
+}
 
 // Relevance score: recency + engagement
 function scorePost(post: any): number {
@@ -213,12 +221,21 @@ app.post("/make-server-4cb0fb87/notifications/:userId/read", async (c) => {
   return c.json({ ok: true });
 });
 
+app.delete("/make-server-4cb0fb87/notifications/:userId", async (c) => {
+  const userId = c.req.param("userId");
+  const auth = await requireUser(c, userId);
+  if (auth.error) return auth.error;
+  await kv.set(`notifs_${userId}`, []);
+  return c.json({ ok: true });
+});
+
 // ── Posts ─────────────────────────────────────────────────────────────────────
 app.post("/make-server-4cb0fb87/posts", async (c) => {
   const { userId, content, videoUrl, replyTo, quotedPostId, taggedUserIds, coAuthors } = await c.req.json();
   if (!userId || (!content?.trim() && !videoUrl)) return c.json({ error: "Content required" }, 400);
   const auth = await requireUser(c, userId);
   if (auth.error) return auth.error;
+  if (hasBannedWords(content)) return c.json({ error: "Post contains blocked language" }, 400);
 
   const id = crypto.randomUUID();
   const post = {
@@ -233,6 +250,7 @@ app.post("/make-server-4cb0fb87/posts", async (c) => {
     createdAt: new Date().toISOString(),
     likes: [], reposts: [],
     likeCount: 0, repostCount: 0, replyCount: 0,
+    reports: [], reportCount: 0, removed: false,
   };
   await kv.set(`post_${id}`, post);
 
@@ -259,9 +277,11 @@ app.post("/make-server-4cb0fb87/posts", async (c) => {
 });
 
 app.get("/make-server-4cb0fb87/posts", async (c) => {
+  const viewerId = c.req.query("viewerId") || "";
+  const blocked = await getBlocked(viewerId);
   const allPosts = await kv.getByPrefix("post_");
   const topLevel = allPosts
-    .filter((p: any) => p && !p.replyTo)
+    .filter((p: any) => p && !p.replyTo && !p.removed && (p.reportCount || 0) < 3 && !blocked.includes(p.userId))
     .sort((a: any, b: any) => scorePost(b) - scorePost(a)) // relevance sort
     .slice(0, 60);
 
@@ -289,9 +309,11 @@ app.get("/make-server-4cb0fb87/posts", async (c) => {
 
 app.get("/make-server-4cb0fb87/posts/:postId/replies", async (c) => {
   const postId = c.req.param("postId");
+  const viewerId = c.req.query("viewerId") || "";
+  const blocked = await getBlocked(viewerId);
   const allPosts = await kv.getByPrefix("post_");
   const replies = allPosts
-    .filter((p: any) => p && p.replyTo === postId)
+    .filter((p: any) => p && p.replyTo === postId && !p.removed && (p.reportCount || 0) < 3 && !blocked.includes(p.userId))
     .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   const enriched = await Promise.all(replies.map(async (post: any) => {
     const profile = await kv.get(`profile_${post.userId}`);
@@ -341,7 +363,42 @@ app.delete("/make-server-4cb0fb87/posts/:postId", async (c) => {
   const post = await kv.get(`post_${postId}`);
   if (!post) return c.json({ error: "Not found" }, 404);
   if (post.userId !== auth.user.id && !isAdminEmail(auth.user.email)) return c.json({ error: "Admin required" }, 403);
-  await kv.del(`post_${postId}`);
+  post.removed = true;
+  await kv.set(`post_${postId}`, post);
+  return c.json({ ok: true });
+});
+
+app.post("/make-server-4cb0fb87/posts/:postId/report", async (c) => {
+  const postId = c.req.param("postId");
+  const { userId, reason } = await c.req.json();
+  const auth = await requireUser(c, userId);
+  if (auth.error) return auth.error;
+  const post = await kv.get(`post_${postId}`);
+  if (!post) return c.json({ error: "Not found" }, 404);
+  post.reports = Array.from(new Set([...(post.reports || []), userId]));
+  post.reportCount = post.reports.length;
+  if (post.reportCount >= 3) post.removed = true;
+  await kv.set(`post_${postId}`, post);
+  await pushNotif(post.userId, { type: "report", fromUserId: userId, fromName: "Community", postId, message: `Your post was reported${reason ? `: ${cleanText(reason, 120)}` : ""}` });
+  return c.json({ ok: true, hidden: post.removed, reportCount: post.reportCount });
+});
+
+app.post("/make-server-4cb0fb87/block", async (c) => {
+  const { userId, blockedUserId } = await c.req.json();
+  const auth = await requireUser(c, userId);
+  if (auth.error) return auth.error;
+  if (!blockedUserId || userId === blockedUserId) return c.json({ error: "Invalid" }, 400);
+  const blocked = await getBlocked(userId);
+  if (!blocked.includes(blockedUserId)) await kv.set(`blocked_${userId}`, [...blocked, blockedUserId]);
+  return c.json({ ok: true });
+});
+
+app.post("/make-server-4cb0fb87/messages/notify", async (c) => {
+  const { fromUserId, toUserId, fromName, message } = await c.req.json();
+  const auth = await requireUser(c, fromUserId);
+  if (auth.error) return auth.error;
+  if (!toUserId || !message) return c.json({ error: "Missing fields" }, 400);
+  await pushNotif(toUserId, { type: "message", fromUserId, fromName: cleanText(fromName || "Someone"), message: cleanText(message, 160) });
   return c.json({ ok: true });
 });
 

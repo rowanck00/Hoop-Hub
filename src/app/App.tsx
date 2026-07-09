@@ -50,17 +50,25 @@ interface CommunityPlayer {
 }
 interface SessionData { date: string; minutes: number; }
 interface ShotEntry { made: number; attempted: number; date: string; }
-interface StrengthEntry { date: string; weight: number; reps: number; }
+interface StrengthEntry { date: string; weight: number; reps: number; est1rm?: number; notes?: string; videoUrl?: string; }
 interface StrengthExercise { name: string; unit: "lbs" | "kg"; history: StrengthEntry[]; }
+interface JumpTestEntry { id: string; date: string; type: "Squat Jump" | "Countermovement Jump" | "Drop Jump"; height: number; contactTime?: number; rsi?: number; notes?: string; }
+interface AthleticLifts { powerClean: string; deepBackSquat: string; }
 interface TrainingPlanSettings {
   age: string; experience: string; inSeason: boolean; practicesPerWeek: string;
   gamesPerWeek: string; equipment: string; goal: string; kneePain: boolean; notes: string;
 }
+interface WorkoutBlock { id: string; activity: string; minutes: number; notes?: string; }
+interface WorkoutSummary { id: string; date: string; totalMinutes: number; completedMinutes: number; completionPct: number; blocks: WorkoutBlock[]; }
 interface AppData {
   streak: number; lastPracticeDate: string;
   shots: ShotEntry[]; sessions: SessionData[];
   strength: StrengthExercise[];
+  jumpTests?: JumpTestEntry[];
+  athleticLifts?: AthleticLifts;
   trainingPlan?: TrainingPlanSettings;
+  workoutPlan?: WorkoutBlock[];
+  workoutHistory?: WorkoutSummary[];
 }
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -96,6 +104,32 @@ function shootingPct(shots: ShotEntry[]) {
 function extractYTId(url: string) { const m = url.match(/(?:youtu\.be\/|v=|\/embed\/)([A-Za-z0-9_-]{11})/); return m ? m[1] : null; }
 function isDirectVideoUrl(url?: string) { return !!url && /^https:\/\/.+\.(mp4|webm|mov)(\?.*)?$/i.test(url); }
 function verticalFromFlightTime(seconds: number) { return Math.max(0, Math.round(48.26 * seconds * seconds * 10) / 10); }
+function est1rm(weight: number, reps: number) { return Math.round(weight * (1 + reps / 30)); }
+function uploadPathName(name: string, fallback: string) {
+  const ext = (name.split(".").pop() || fallback).toLowerCase().replace(/[^a-z0-9]/g, "") || fallback;
+  return `${Date.now()}-${crypto.randomUUID()}.${ext}`;
+}
+function defaultWorkoutPlan(): WorkoutBlock[] {
+  return [
+    { id: crypto.randomUUID(), activity: "Ball Handling", minutes: 15, notes: "" },
+    { id: crypto.randomUUID(), activity: "Shooting", minutes: 45, notes: "" },
+    { id: crypto.randomUUID(), activity: "Finishing", minutes: 15, notes: "" },
+    { id: crypto.randomUUID(), activity: "Free Throws", minutes: 10, notes: "" },
+  ];
+}
+async function workoutNotify(title: string, body: string) {
+  try {
+    if ("Notification" in window && Notification.permission === "default") await Notification.requestPermission();
+    if ("Notification" in window && Notification.permission === "granted") new Notification(title, { body });
+  } catch {}
+  try { navigator.vibrate?.([250, 80, 250]); } catch {}
+  try {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator(), gain = ctx.createGain();
+    osc.frequency.value = 880; gain.gain.value = 0.05; osc.connect(gain); gain.connect(ctx.destination); osc.start();
+    setTimeout(() => { osc.stop(); ctx.close(); }, 220);
+  } catch {}
+}
 function timeAgo(iso: string) {
   const diff = Date.now() - new Date(iso).getTime(), m = Math.floor(diff / 60000);
   if (m < 1) return "just now"; if (m < 60) return `${m}m`;
@@ -114,7 +148,7 @@ function defaultStrength(): StrengthExercise[] {
 function emptyTrainingPlan(): TrainingPlanSettings {
   return { age: "15", experience: "Intermediate", inSeason: false, practicesPerWeek: "3", gamesPerWeek: "1", equipment: "Ball, hoop", goal: "Shooting", kneePain: false, notes: "" };
 }
-function emptyData(): AppData { return { streak: 0, lastPracticeDate: "", shots: [], sessions: [], strength: defaultStrength(), trainingPlan: emptyTrainingPlan() }; }
+function emptyData(): AppData { return { streak: 0, lastPracticeDate: "", shots: [], sessions: [], strength: defaultStrength(), jumpTests: [], athleticLifts: { powerClean: "", deepBackSquat: "" }, trainingPlan: emptyTrainingPlan(), workoutPlan: defaultWorkoutPlan(), workoutHistory: [] }; }
 function initials(p?: MiniProfile | null) { return p ? `${p.firstName?.[0] ?? ""}${p.lastName?.[0] ?? ""}`.toUpperCase() : "?"; }
 
 // ─── Rank system ──────────────────────────────────────────────────────────────
@@ -192,8 +226,7 @@ async function apiPost(path: string, body: any) {
 }
 
 async function uploadCommunityVideo(userId: string, file: File) {
-  const ext = (file.name.split(".").pop() || "mp4").toLowerCase().replace(/[^a-z0-9]/g, "") || "mp4";
-  const path = `${userId}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+  const path = `${userId}/${uploadPathName(file.name, "mp4")}`;
   const { error } = await supabase.storage.from("community-videos").upload(path, file, {
     cacheControl: "3600",
     contentType: file.type || "video/mp4",
@@ -201,6 +234,16 @@ async function uploadCommunityVideo(userId: string, file: File) {
   });
   if (error) throw error;
   return supabase.storage.from("community-videos").getPublicUrl(path).data.publicUrl;
+}
+async function uploadUserAsset(bucket: string, userId: string, file: File, fallbackExt: string) {
+  const path = `${userId}/${uploadPathName(file.name, fallbackExt)}`;
+  const { error } = await supabase.storage.from(bucket).upload(path, file, {
+    cacheControl: "3600",
+    contentType: file.type || "application/octet-stream",
+    upsert: false,
+  });
+  if (error) throw error;
+  return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
 }
 
 const fetchTeams    = async (): Promise<Team[]> => { const d = await apiFetch<{teams: Team[]}>("/teams", {teams:[]}); return d.teams ?? []; };
@@ -213,6 +256,7 @@ const unfollowUser  = (followerId: string, followeeId: string) => apiPost("/unfo
 const fetchSocial   = async (userId: string) => apiFetch<{following:string[];followers:string[];followingCount:number;followersCount:number}>(`/social/${userId}`, {following:[],followers:[],followingCount:0,followersCount:0});
 const fetchNotifs   = async (userId: string) => { const d = await apiFetch<{notifications: any[]}>(`/notifications/${userId}`, {notifications:[]}); return d.notifications ?? []; };
 const markNotifsRead = (userId: string) => apiPost(`/notifications/${userId}/read`, {});
+const clearNotifs = (userId: string) => bg(`${SERVER}/notifications/${userId}`, { method: "DELETE" });
 const deleteTeam = (id: string) => bg(`${SERVER}/teams/${id}`, { method: "DELETE" });
 
 // ─── Chart Tip ────────────────────────────────────────────────────────────────
@@ -275,8 +319,18 @@ function PostCard({ post, currentUserId, currentUserName, canModerate = false, o
   async function handleShowReplies() {
     if (showReplies) { setShowReplies(false); return; }
     setLoadingReplies(true);
-    const d = await apiFetch<{ replies: PostData[] }>(`/posts/${post.id}/replies`, { replies: [] });
+    const d = await apiFetch<{ replies: PostData[] }>(`/posts/${post.id}/replies?viewerId=${encodeURIComponent(currentUserId || "")}`, { replies: [] });
     setReplies(d.replies); setShowReplies(true); setLoadingReplies(false);
+  }
+  async function handleReport() {
+    if (!currentUserId) return;
+    await apiPost(`/posts/${post.id}/report`, { userId: currentUserId, reason: "Reported in app" });
+    onDelete(post.id);
+  }
+  async function handleBlock() {
+    if (!currentUserId || currentUserId === post.userId) return;
+    await apiPost("/block", { userId: currentUserId, blockedUserId: post.userId });
+    onDelete(post.id);
   }
 
   return (
@@ -313,6 +367,8 @@ function PostCard({ post, currentUserId, currentUserName, canModerate = false, o
         <button onClick={() => onQuote(post)} disabled={!currentUserId} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors disabled:cursor-not-allowed">
           <Quote size={13} />
         </button>
+        <button onClick={handleReport} disabled={!currentUserId} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-amber-400 hover:bg-amber-400/10 disabled:cursor-not-allowed">Report</button>
+        {currentUserId && currentUserId !== post.userId && <button onClick={handleBlock} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10">Block</button>}
         {post.replyCount > 0 && !isReply && (
           <button onClick={handleShowReplies} className="ml-auto text-xs text-muted-foreground hover:text-primary">
             {loadingReplies ? "Loading…" : showReplies ? "Hide" : `${post.replyCount} repl${post.replyCount === 1 ? "y" : "ies"}`}
@@ -420,8 +476,8 @@ function FeedTab({ currentUserId, currentProfile }: { currentUserId?: string; cu
   const canModerate = isAdmin(currentProfile);
 
   useEffect(() => {
-    apiFetch<{ posts: PostData[] }>("/posts", { posts: [] }).then(d => { setPosts(d.posts ?? []); setLoading(false); });
-  }, []);
+    apiFetch<{ posts: PostData[] }>(`/posts?viewerId=${encodeURIComponent(currentUserId || "")}`, { posts: [] }).then(d => { setPosts(d.posts ?? []); setLoading(false); });
+  }, [currentUserId]);
 
   const addPost = (p: PostData) => setPosts(prev => [p, ...prev]);
 
@@ -973,7 +1029,7 @@ function ProfileSetup({ userId, email, onComplete }: { userId: string; email: st
             <div><label className={lbl}>First Name *</label><input autoFocus value={form.firstName} onChange={e => set("firstName", e.target.value)} placeholder="First name" className={cls} required /></div>
             <div><label className={lbl}>Last Name *</label><input value={form.lastName} onChange={e => set("lastName", e.target.value)} placeholder="Last name" className={cls} required /></div>
           </div>
-          <div><label className={lbl}>Profile Image URL (optional)</label><input value={form.avatarUrl} onChange={e => set("avatarUrl", e.target.value)} placeholder="https://..." className={cls} />{form.avatarUrl && !sanitizeImageUrl(form.avatarUrl) && <p className="text-xs text-destructive mt-1">Use a valid https image link.</p>}</div>
+          <div><label className={lbl}>Profile Image</label><input type="file" accept="image/*" onChange={async e => { const f=e.target.files?.[0]; if(f) set("avatarUrl", await uploadUserAsset("profile-images", userId, f, "jpg").catch(()=>"")); }} className={cls} />{form.avatarUrl && <p className="text-xs text-primary mt-1">Image selected</p>}</div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className={lbl}>Position</label><select value={form.position} onChange={e => set("position", e.target.value)} className={cls}>{POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}</select></div>
             <div><label className={lbl}>Grad Year</label><input value={form.gradYear} onChange={e => set("gradYear", e.target.value)} placeholder="2026" className={cls} /></div>
@@ -1265,7 +1321,167 @@ function TrainingPlanBuilder({ data, onUpdate }: { data: AppData; onUpdate: (d: 
   );
 }
 
-function TrainingView({ data }: { data: AppData }) {
+function JumpTestingSection({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData) => void }) {
+  const [type, setType] = useState<JumpTestEntry["type"]>("Countermovement Jump");
+  const [height, setHeight] = useState("");
+  const [contact, setContact] = useState("");
+  const [notes, setNotes] = useState("");
+  const tests = data.jumpTests || [];
+  const rsiHistory = tests.filter(t => t.rsi).map(t => ({ date: shortDate(t.date), rsi: t.rsi }));
+  function save() {
+    const h = parseFloat(height), c = parseFloat(contact);
+    if (!h) return;
+    const entry: JumpTestEntry = { id: crypto.randomUUID(), date: new Date().toISOString().slice(0,10), type, height: h, contactTime: c || undefined, rsi: c ? Math.round((h / 39.37 / c) * 100) / 100 : undefined, notes: notes.trim() };
+    onUpdate({ ...data, jumpTests: [...tests, entry] });
+    setHeight(""); setContact(""); setNotes("");
+  }
+  return (
+    <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
+      <div className="flex items-center gap-2"><Activity size={14} className="text-primary"/><span className="text-xs uppercase tracking-wider text-muted-foreground">Jump Testing</span></div>
+      <div className="grid md:grid-cols-4 gap-3">
+        <select value={type} onChange={e => setType(e.target.value as JumpTestEntry["type"])} className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none">
+          <option>Squat Jump</option><option>Countermovement Jump</option><option>Drop Jump</option>
+        </select>
+        <input value={height} onChange={e => setHeight(e.target.value)} type="number" placeholder="Jump height (in)" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none" />
+        <input value={contact} onChange={e => setContact(e.target.value)} type="number" step="0.01" placeholder="Contact time (sec)" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none" />
+        <button onClick={save} className="bg-primary text-primary-foreground rounded-xl px-3 py-2 text-sm font-semibold">Save Test</button>
+      </div>
+      <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Notes" className="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none" />
+      {rsiHistory.length >= 2 && <div className="h-44"><ResponsiveContainer width="100%" height="100%"><LineChart data={rsiHistory}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" /><XAxis dataKey="date" tick={{fill:"#8a8680",fontSize:11}} /><YAxis tick={{fill:"#8a8680",fontSize:11}} /><Tooltip content={<ChartTip />} /><Line type="monotone" dataKey="rsi" stroke="#159447" strokeWidth={2.5} /></LineChart></ResponsiveContainer></div>}
+      <div className="space-y-2">{[...tests].reverse().slice(0, 8).map(t => <div key={t.id} className="flex flex-wrap justify-between gap-2 border-b border-border pb-2 text-sm"><span>{shortDate(t.date)} - {t.type}</span><span className="text-primary font-semibold">{t.height}"{t.rsi ? ` | RSI ${t.rsi}` : ""}</span></div>)}</div>
+    </div>
+  );
+}
+
+function AthleticAnalysisSection({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData) => void }) {
+  const lifts = data.athleticLifts || { powerClean: "", deepBackSquat: "" };
+  const setLift = (k: keyof AthleticLifts, v: string) => onUpdate({ ...data, athleticLifts: { ...lifts, [k]: v } });
+  const tests = data.jumpTests || [];
+  const latest = (type: JumpTestEntry["type"]) => [...tests].reverse().find(t => t.type === type)?.height || 0;
+  const sj = latest("Squat Jump"), cmj = latest("Countermovement Jump"), dj = latest("Drop Jump");
+  const pc = parseFloat(lifts.powerClean), squat = parseFloat(lifts.deepBackSquat);
+  const powerRatio = pc && squat ? pc / squat : 0;
+  const findings: { title: string; text: string; recs: string }[] = [];
+  if (powerRatio) findings.push(powerRatio < 0.7
+    ? { title: "Power Deficit Detected", text: "The model suggests you produce force well but may struggle to express it explosively.", recs: "Olympic lifting, jump squats, sprinting, ballistic movements, high-velocity lifting." }
+    : { title: "Strength Deficit Detected", text: "The model suggests your explosive expression is solid relative to your max strength.", recs: "Heavy squats, front squats, and max strength work." });
+  if (sj && cmj && (cmj - sj < Math.max(2, sj * 0.1))) findings.push({ title: "Low Stretch Shortening Cycle Utilization", text: "Countermovement jump is not much higher than squat jump.", recs: "Extensive plyometrics, basic intensive plyometrics, high-velocity lifting." });
+  if (cmj && dj && (dj - cmj < Math.max(2, cmj * 0.1))) findings.push({ title: "High Stretch Shortening Cycle Deficit", text: "Drop jump is not much higher than countermovement jump.", recs: "Intensive plyometrics, depth jumps, reactive jumps, eccentric-focused training." });
+  if (!findings.length) findings.push({ title: "Balanced Athlete", text: "No major deficit is flagged by this app model.", recs: "Maintain all qualities with a long conjugate sequence and one primary focus each block." });
+  return (
+    <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
+      <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Athletic Analysis</p><p className="text-xs text-muted-foreground mt-1">These are recommendations from the app model, not absolute scientific conclusions.</p></div>
+      <div className="grid grid-cols-2 gap-3">
+        <input value={lifts.powerClean} onChange={e => setLift("powerClean", e.target.value)} type="number" placeholder="Power Clean" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none" />
+        <input value={lifts.deepBackSquat} onChange={e => setLift("deepBackSquat", e.target.value)} type="number" placeholder="Deep Back Squat" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none" />
+      </div>
+      <div className="grid md:grid-cols-2 gap-3">{findings.map(f => <div key={f.title} className="bg-background border border-border rounded-xl p-4"><p className="text-primary font-black mb-1">{f.title}</p><p className="text-sm text-muted-foreground mb-2">{f.text}</p><p className="text-sm">{f.recs}</p></div>)}</div>
+    </div>
+  );
+}
+
+function HoursManager({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData) => void }) {
+  const [date, setDate] = useState(new Date().toISOString().slice(0,10));
+  const [hours, setHours] = useState("");
+  function save() {
+    const minutes = Math.round((parseFloat(hours) || 0) * 60);
+    if (!minutes) return;
+    const sessions = [...data.sessions];
+    const idx = sessions.findIndex(s => s.date === date);
+    if (idx >= 0) sessions[idx] = { date, minutes }; else sessions.push({ date, minutes });
+    onUpdate({ ...data, sessions: sessions.sort((a,b)=>a.date.localeCompare(b.date)) });
+    setHours("");
+  }
+  return (
+    <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
+      <p className="text-xs uppercase tracking-wider text-muted-foreground">Training Hours</p>
+      <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2"><input type="date" value={date} onChange={e=>setDate(e.target.value)} className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none"/><input type="number" value={hours} onChange={e=>setHours(e.target.value)} placeholder="Hours" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none"/><button onClick={save} className="bg-primary text-primary-foreground rounded-xl px-4 py-2 text-sm font-semibold">Save</button></div>
+      <div className="space-y-2">{[...data.sessions].reverse().slice(0,10).map(s=><div key={s.date} className="flex justify-between items-center border-b border-border pb-2 text-sm"><span>{shortDate(s.date)}</span><span>{Math.round(s.minutes/60*10)/10} hr</span><button onClick={()=>onUpdate({...data,sessions:data.sessions.filter(x=>x.date!==s.date)})} className="text-muted-foreground hover:text-destructive">Delete</button></div>)}</div>
+    </div>
+  );
+}
+
+function WorkoutPlanner({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData) => void }) {
+  const plan = data.workoutPlan?.length ? data.workoutPlan : defaultWorkoutPlan();
+  const [active, setActive] = useState(false), [paused, setPaused] = useState(false);
+  const [idx, setIdx] = useState(0), [remaining, setRemaining] = useState(0), [doneSec, setDoneSec] = useState(0);
+  const [summary, setSummary] = useState<WorkoutSummary | null>(null);
+  const endAtRef = useRef(0);
+  const startRemainingRef = useRef(0);
+  const totalSec = plan.reduce((a,b)=>a + Math.max(0, Number(b.minutes)||0) * 60, 0);
+  const current = plan[idx], next = plan[idx + 1];
+  const completedSec = doneSec + (active && current ? Math.max(0, startRemainingRef.current - remaining) : 0);
+  const pct = totalSec ? Math.min(100, Math.round((completedSec / totalSec) * 100)) : 0;
+  const totalLeft = Math.max(0, remaining + plan.slice(idx + 1).reduce((a,b)=>a + b.minutes * 60, 0));
+  const setBlock = (id: string, patch: Partial<WorkoutBlock>) => onUpdate({ ...data, workoutPlan: plan.map(b => b.id === id ? { ...b, ...patch } : b) });
+  const addBlock = () => onUpdate({ ...data, workoutPlan: [...plan, { id: crypto.randomUUID(), activity: "New Drill", minutes: 10, notes: "" }] });
+  const removeBlock = (id: string) => onUpdate({ ...data, workoutPlan: plan.filter(b => b.id !== id) });
+  function startBlock(i: number) {
+    const sec = Math.max(1, (plan[i]?.minutes || 0) * 60);
+    setIdx(i); setRemaining(sec); startRemainingRef.current = sec; endAtRef.current = Date.now() + sec * 1000;
+  }
+  async function startWorkout() {
+    if (!plan.length) return;
+    await workoutNotify("Workout started", plan[0].activity);
+    setSummary(null); setDoneSec(0); setPaused(false); setActive(true); startBlock(0);
+  }
+  function logWorkout(minutes: number, completionPct: number) {
+    const today = new Date().toISOString().slice(0,10);
+    const sessions = [...data.sessions];
+    const existing = sessions.find(s => s.date === today);
+    if (existing) existing.minutes += minutes; else sessions.push({ date: today, minutes });
+    const sum: WorkoutSummary = { id: crypto.randomUUID(), date: today, totalMinutes: Math.round(totalSec / 60), completedMinutes: minutes, completionPct, blocks: plan };
+    onUpdate({ ...data, sessions, workoutPlan: plan, workoutHistory: [sum, ...(data.workoutHistory || [])].slice(0, 20) });
+    setSummary(sum);
+  }
+  async function finishWorkout(early = false) {
+    const finalSec = early ? completedSec : totalSec;
+    const minutes = Math.max(1, Math.round(finalSec / 60));
+    const completionPct = totalSec ? Math.min(100, Math.round((finalSec / totalSec) * 100)) : 0;
+    setActive(false); setPaused(false); setRemaining(0);
+    logWorkout(minutes, completionPct);
+    await workoutNotify(early ? "Workout ended" : "Workout complete", `${minutes} minutes logged`);
+  }
+  async function completeCurrent() {
+    const block = plan[idx];
+    const newDone = doneSec + startRemainingRef.current;
+    setDoneSec(newDone);
+    await workoutNotify(`${block.activity} complete`, next ? `Next: ${next.activity}` : "Workout complete");
+    if (idx + 1 >= plan.length) { setTimeout(() => finishWorkout(false), 0); return; }
+    startBlock(idx + 1);
+  }
+  function skip() { setDoneSec(doneSec + Math.max(0, startRemainingRef.current - remaining)); if (idx + 1 >= plan.length) void finishWorkout(true); else startBlock(idx + 1); }
+  function addTime() { const nextRemaining = remaining + 300; setRemaining(nextRemaining); startRemainingRef.current += 300; endAtRef.current = Date.now() + nextRemaining * 1000; }
+  function togglePause() { if (!active) return; if (paused) { endAtRef.current = Date.now() + remaining * 1000; setPaused(false); } else setPaused(true); }
+  useEffect(() => {
+    if (!active || paused) return;
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((endAtRef.current - Date.now()) / 1000));
+      setRemaining(left);
+      if (left <= 0) void completeCurrent();
+    };
+    tick();
+    const id = setInterval(tick, 500);
+    window.addEventListener("focus", tick); document.addEventListener("visibilitychange", tick);
+    return () => { clearInterval(id); window.removeEventListener("focus", tick); document.removeEventListener("visibilitychange", tick); };
+  }, [active, paused, idx, doneSec, plan]);
+
+  return (
+    <div className="bg-card border border-border rounded-2xl p-6 space-y-5">
+      <div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-wider text-muted-foreground">Today's Workout</p><p className="text-sm text-muted-foreground">{Math.round(totalSec/60)} min planned</p></div>{!active&&<button onClick={startWorkout} className="bg-primary text-primary-foreground rounded-xl px-4 py-2 text-sm font-semibold">Start Workout</button>}</div>
+      {!active && <div className="space-y-2">{plan.map(b=><div key={b.id} className="grid grid-cols-1 md:grid-cols-[1.4fr_.6fr_1.5fr_auto] gap-2"><input value={b.activity} onChange={e=>setBlock(b.id,{activity:e.target.value})} className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none"/><input value={b.minutes} onChange={e=>setBlock(b.id,{minutes:Number(e.target.value)||0})} type="number" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none"/><input value={b.notes||""} onChange={e=>setBlock(b.id,{notes:e.target.value})} placeholder="Notes" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none"/><button onClick={()=>removeBlock(b.id)} className="text-muted-foreground hover:text-destructive px-3">Delete</button></div>)}<button onClick={addBlock} className="text-sm text-primary font-semibold">Add Block</button></div>}
+      {active && current && <div className="space-y-4">
+        <div className="bg-background border border-border rounded-xl p-5 text-center"><p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Current Drill</p><p className="text-2xl font-black text-primary">{current.activity}</p><p className="text-6xl font-black tabular-nums mt-3" style={{fontFamily:"'DM Mono',monospace"}}>{formatTime(remaining)}</p>{current.notes&&<p className="text-sm text-muted-foreground mt-2">{current.notes}</p>}</div>
+        <div className="h-2 bg-muted rounded-full overflow-hidden"><div className="h-full bg-primary rounded-full transition-all" style={{width:`${pct}%`}} /></div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm"><div><p className="text-muted-foreground">Next</p><p>{next?.activity || "Finish"}</p></div><div><p className="text-muted-foreground">Total Left</p><p>{formatTime(totalLeft)}</p></div><div><p className="text-muted-foreground">Completed</p><p>{pct}%</p></div><div><p className="text-muted-foreground">Block</p><p>{idx + 1} / {plan.length}</p></div></div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2"><button onClick={togglePause} className="bg-secondary rounded-xl py-2 text-sm font-semibold">{paused ? "Resume" : "Pause"}</button><button onClick={skip} className="bg-secondary rounded-xl py-2 text-sm font-semibold">Skip Drill</button><button onClick={addTime} className="bg-secondary rounded-xl py-2 text-sm font-semibold">+5 Min</button><button onClick={()=>void finishWorkout(true)} className="bg-secondary rounded-xl py-2 text-sm font-semibold text-destructive">End Early</button></div>
+      </div>}
+      {summary && <div className="bg-background border border-border rounded-xl p-4"><p className="font-black text-primary mb-1">Workout Summary</p><p className="text-sm">Completed {summary.completedMinutes} of {summary.totalMinutes} planned minutes ({summary.completionPct}%). Basketball hours were added to training history.</p></div>}
+    </div>
+  );
+}
+
+function TrainingView({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData) => void }) {
   const weeklyData = Array.from({ length: 8 }, (_, wi) => {
     const wS = 7 * (7 - wi), wE = wS - 7;
     const total = data.sessions.filter(s => { const ago = Math.floor((Date.now() - new Date(s.date + "T12:00:00").getTime()) / 86400000); return ago < wS && ago >= wE; }).reduce((a, b) => a + b.minutes, 0);
@@ -1283,7 +1499,10 @@ function TrainingView({ data }: { data: AppData }) {
   return (
     <div className="space-y-6">
       <ViewHero img="1519861531473-9200262188bf" title="Training" sub="Long-term progress" />
+      <WorkoutPlanner data={data} onUpdate={onUpdate} />
       <FlightTimeTool />
+      <JumpTestingSection data={data} onUpdate={onUpdate} />
+      <AthleticAnalysisSection data={data} onUpdate={onUpdate} />
       <div className="bg-card border border-border rounded-2xl p-6">
         <div className="flex items-center gap-2 mb-5"><Clock size={14} className="text-primary" /><span className="text-xs uppercase tracking-wider text-muted-foreground">Weekly Volume (last 8 weeks)</span></div>
         <div className="h-52"><ResponsiveContainer width="100%" height="100%"><BarChart id="t-weekly" data={weeklyData} barSize={28} margin={{ top:4,right:4,bottom:0,left:-20 }}>
@@ -1316,18 +1535,20 @@ function TrainingView({ data }: { data: AppData }) {
 }
 
 // ─── Strength View ────────────────────────────────────────────────────────────
-function StrengthView({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData) => void }) {
-  const [sel, setSel] = useState(0), [adding, setAdding] = useState(false), [wt, setWt] = useState(""), [rp, setRp] = useState(""), [addEx, setAddEx] = useState(false), [exName, setExName] = useState("");
+function StrengthView({ data, onUpdate, userId }: { data: AppData; onUpdate: (d: AppData) => void; userId: string }) {
+  const [sel, setSel] = useState(0), [adding, setAdding] = useState(false), [wt, setWt] = useState(""), [rp, setRp] = useState(""), [note, setNote] = useState(""), [prVideo, setPrVideo] = useState<File | null>(null), [addEx, setAddEx] = useState(false), [exName, setExName] = useState("");
   const ex = data.strength[Math.min(sel, data.strength.length-1)];
-  const saveEntry = () => { const w=parseFloat(wt),r=parseInt(rp); if(!w||!r)return; onUpdate({...data,strength:data.strength.map((e,i)=>i===sel?{...e,history:[...e.history,{date:new Date().toISOString().slice(0,10),weight:w,reps:r}]}:e)}); setWt(""); setRp(""); setAdding(false); };
+  const saveEntry = async () => { const w=parseFloat(wt),r=parseInt(rp); if(!w||!r)return; const videoUrl = prVideo ? await uploadUserAsset("pr-videos", userId, prVideo, "mp4").catch(()=>"") : ""; onUpdate({...data,strength:data.strength.map((e,i)=>i===sel?{...e,history:[...e.history,{date:new Date().toISOString().slice(0,10),weight:w,reps:r,est1rm:est1rm(w,r),notes:note.trim(),videoUrl}]}:e)}); setWt(""); setRp(""); setNote(""); setPrVideo(null); setAdding(false); };
   const saveEx = () => { if(!exName.trim())return; const nd={...data,strength:[...data.strength,{name:exName.trim(),unit:"lbs" as const,history:[]}]}; onUpdate(nd); setSel(nd.strength.length-1); setExName(""); setAddEx(false); };
-  const graphData = ex.history.map(h=>({date:shortDate(h.date),weight:h.weight}));
+  const graphData = ex.history.map(h=>({date:shortDate(h.date),weight:h.weight,est1rm:h.est1rm || est1rm(h.weight,h.reps)}));
   const best = ex.history.length?Math.max(...ex.history.map(h=>h.weight)):0;
+  const bestEst = ex.history.length?Math.max(...ex.history.map(h=>h.est1rm || est1rm(h.weight,h.reps))):0;
   const last = ex.history.length?ex.history[ex.history.length-1].weight:null;
   return (
     <div className="space-y-6">
       <ViewHero img="1581009146145-b5ef050c2e1e" title="Strength" sub="Track your lifts" />
       <TrainingPlanBuilder data={data} onUpdate={onUpdate} />
+      <div className="bg-card border border-border rounded-2xl p-4"><p className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Best Estimated 1RM</p><p className="text-3xl font-black text-primary" style={{fontFamily:"'Roboto Slab',serif"}}>{bestEst ? `${bestEst} ${ex.unit}` : "-"}</p></div>
       <div className="flex flex-wrap gap-2">
         {data.strength.map((e,i)=><button key={i} onClick={()=>{setSel(i);setAdding(false);}} className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${i===sel?"bg-primary text-primary-foreground":"bg-secondary text-secondary-foreground hover:bg-muted"}`}>{e.name}</button>)}
         {addEx?(<div className="flex items-center gap-2"><input autoFocus value={exName} onChange={e=>setExName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveEx()} placeholder="Exercise name" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none w-36" /><button onClick={saveEx} className="bg-primary text-primary-foreground rounded-xl p-2"><Check size={14}/></button><button onClick={()=>{setAddEx(false);setExName("");}} className="bg-secondary rounded-xl p-2"><X size={14}/></button></div>)
@@ -1338,15 +1559,19 @@ function StrengthView({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData
       :<div className="bg-card border border-border rounded-2xl p-8 text-center text-muted-foreground text-sm">Log at least 2 sessions to see your chart.</div>}
       <div className="bg-card border border-border rounded-2xl p-6">
         <div className="flex items-center justify-between mb-4"><span className="text-xs uppercase tracking-wider text-muted-foreground">History</span>{!adding&&<button onClick={()=>setAdding(true)} className="flex items-center gap-1.5 bg-primary text-primary-foreground text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-accent"><Plus size={12}/> Log today</button>}</div>
-        {adding&&(<div className="flex items-end gap-3 mb-4 p-3 bg-secondary rounded-xl"><div className="flex-1"><label className="text-xs text-muted-foreground block mb-1">Weight ({ex.unit})</label><input autoFocus value={wt} onChange={e=>setWt(e.target.value)} type="number" placeholder="135" className="w-full bg-muted border border-border rounded-lg px-3 py-1.5 text-sm outline-none"/></div><div className="flex-1"><label className="text-xs text-muted-foreground block mb-1">Reps</label><input value={rp} onChange={e=>setRp(e.target.value)} type="number" placeholder="5" className="w-full bg-muted border border-border rounded-lg px-3 py-1.5 text-sm outline-none"/></div><div className="flex gap-2"><button onClick={saveEntry} className="bg-primary text-primary-foreground rounded-lg p-2 hover:bg-accent"><Check size={15}/></button><button onClick={()=>setAdding(false)} className="bg-muted rounded-lg p-2"><X size={15}/></button></div></div>)}
+        {adding&&(<div className="grid md:grid-cols-[1fr_1fr_2fr_auto] gap-3 mb-4 p-3 bg-secondary rounded-xl"><div><label className="text-xs text-muted-foreground block mb-1">Weight ({ex.unit})</label><input autoFocus value={wt} onChange={e=>setWt(e.target.value)} type="number" placeholder="225" className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm outline-none"/></div><div><label className="text-xs text-muted-foreground block mb-1">Reps</label><input value={rp} onChange={e=>setRp(e.target.value)} type="number" placeholder="5" className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm outline-none"/></div><div><label className="text-xs text-muted-foreground block mb-1">Notes / PR video</label><input value={note} onChange={e=>setNote(e.target.value)} placeholder="Notes" className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm outline-none mb-2"/><input type="file" accept="video/*" onChange={e=>setPrVideo(e.target.files?.[0]||null)} className="text-xs w-full"/></div><div className="flex gap-2 items-end"><button onClick={saveEntry} className="bg-primary text-primary-foreground rounded-lg p-3 hover:bg-accent"><Check size={15}/></button><button onClick={()=>setAdding(false)} className="bg-muted rounded-lg p-3"><X size={15}/></button></div></div>)}
         {ex.history.length===0?<p className="text-muted-foreground text-sm text-center py-4">No entries yet.</p>:(<div>{[...ex.history].reverse().map((h,i)=>(<div key={i} className="flex justify-between items-center py-2 border-b border-border last:border-0"><span className="text-sm text-muted-foreground">{shortDate(h.date)}</span><div className="flex gap-4"><span className="text-sm">{h.reps} reps</span><span className="text-sm font-semibold text-primary">{h.weight} {ex.unit}</span></div></div>))}</div>)}
+      </div>
+      <div className="bg-card border border-border rounded-2xl p-6">
+        <p className="text-xs uppercase tracking-wider text-muted-foreground mb-4">Estimated 1RM History</p>
+        {ex.history.length===0?<p className="text-muted-foreground text-sm">No PRs yet.</p>:<div className="space-y-3">{[...ex.history].reverse().map((h,i)=><div key={i} className="border-b border-border pb-3 last:border-0"><div className="flex flex-wrap justify-between gap-2 text-sm"><span>{shortDate(h.date)} - {h.weight} x {h.reps}</span><span className="text-primary font-semibold">Estimated 1RM {h.est1rm || est1rm(h.weight,h.reps)} {ex.unit}</span></div>{h.notes&&<p className="text-xs text-muted-foreground mt-1">{h.notes}</p>}{h.videoUrl&&<video src={h.videoUrl} controls className="mt-2 w-full max-h-56 rounded-xl bg-black object-contain"/>}</div>)}</div>}
       </div>
     </div>
   );
 }
 
 // ─── Editable Measurables ────────────────────────────────────────────────────
-function EditableMeasurables({ profile, onSave }: { profile: UserProfile; onSave: (u: Partial<UserProfile>) => void }) {
+function EditableMeasurables({ profile, userId, onSave }: { profile: UserProfile; userId: string; onSave: (u: Partial<UserProfile>) => void }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ firstName: profile.firstName, lastName: profile.lastName, avatarUrl: profile.avatarUrl || "", height: profile.height, weight: profile.weight, wingspan: profile.wingspan, vertical: profile.vertical, position: profile.position, gradYear: profile.gradYear });
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
@@ -1409,9 +1634,9 @@ function EditableMeasurables({ profile, onSave }: { profile: UserProfile; onSave
           <input value={form.lastName} onChange={e => set("lastName", e.target.value)} placeholder="Last name" className={cls} />
         </div>
         <div className="col-span-2">
-          <label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">Profile Image URL</label>
-          <input value={form.avatarUrl} onChange={e => set("avatarUrl", e.target.value)} placeholder="https://..." className={cls} />
-          {form.avatarUrl && !sanitizeImageUrl(form.avatarUrl) && <p className="text-xs text-destructive mt-1">Use a valid https image link.</p>}
+          <label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">Profile Image</label>
+          <input type="file" accept="image/*" onChange={async e => { const f=e.target.files?.[0]; if(f) set("avatarUrl", await uploadUserAsset("profile-images", userId, f, "jpg").catch(() => form.avatarUrl)); }} className={cls} />
+          {form.avatarUrl && <p className="text-xs text-primary mt-1">Profile image selected</p>}
         </div>
         <div>
           <label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">Position</label>
@@ -1699,8 +1924,8 @@ export default function App() {
       {showNotifs && userId && <NotifPanel userId={userId} onClose={() => { setShowNotifs(false); setUnreadCount(0); }} />}
 
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
-        {view==="training" && <TrainingView data={data}/>}
-        {view==="strength" && <StrengthView data={data} onUpdate={updateData}/>}
+        {view==="training" && <TrainingView data={data} onUpdate={updateData}/>}
+        {view==="strength" && userId && <StrengthView data={data} onUpdate={updateData} userId={userId}/>}
         {view==="community" && <CommunityPage currentUserId={userId??undefined} currentProfile={profile} onBack={()=>setView("home")}/>}
 
         {view==="home" && <>
@@ -1736,7 +1961,7 @@ export default function App() {
           </div>
 
           {/* Measurables with edit */}
-          <EditableMeasurables profile={profile} onSave={updated => {
+          <EditableMeasurables profile={profile} userId={userId!} onSave={updated => {
             const np = withRole({ ...profile, ...updated });
             setProfile(np);
             void saveProfileCloud(userId!, np);
@@ -1772,14 +1997,14 @@ export default function App() {
               <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground"><Target size={13} className="text-primary"/> Log Shots</div>
               {!shotMode?(
                 <div className="flex flex-col gap-4">
-                  <div className="space-y-2">{data.shots.slice(-3).reverse().map((s,i)=>(<div key={i} className="flex items-center justify-between text-sm"><span className="text-muted-foreground">Session {data.shots.length-i}</span><div className="flex items-center gap-2"><div className="h-1.5 w-24 bg-muted rounded-full overflow-hidden"><div className="h-full bg-primary rounded-full" style={{width:`${Math.round((s.made/s.attempted)*100)}%`}}/></div><span className="font-medium w-10 text-right">{Math.round((s.made/s.attempted)*100)}%</span></div></div>))}</div>
+                  <div className="space-y-2">{data.shots.slice(-3).reverse().map((s,i)=>(<div key={s.date} className="flex items-center justify-between gap-2 text-sm"><span className="text-muted-foreground">{shortDate(s.date)}</span><div className="flex items-center gap-2 min-w-0"><span className="font-medium">{s.made}/{s.attempted}</span><span className="font-medium text-primary">{Math.round((s.made/s.attempted)*100)}%</span><button onClick={()=>updateData({...data,shots:data.shots.filter(x=>x.date!==s.date)})} className="text-muted-foreground hover:text-destructive">Delete</button></div></div>))}</div>
                   <button onClick={()=>setShotMode(true)} className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground font-semibold py-2.5 rounded-xl hover:bg-accent text-sm"><Plus size={15}/> Log New Session</button>
                 </div>
               ):(
                 <div className="flex flex-col gap-4">
                   <div className="grid grid-cols-2 gap-3">
                     {[{lbl:"Made",val:shotMade,set:setShotMade},{lbl:"Attempted",val:shotAtt,set:setShotAtt}].map(({lbl,val,set})=>(
-                      <div key={lbl} className="flex flex-col gap-1.5"><label className="text-xs text-muted-foreground uppercase tracking-wide">{lbl}</label><div className="flex items-center gap-2"><button onClick={()=>set(v=>Math.max(0,v-1))} className="bg-secondary rounded-lg p-1.5 hover:bg-muted"><Minus size={14}/></button><span className="text-2xl font-black text-primary w-8 text-center" style={{fontFamily:"'Roboto Slab',serif"}}>{val}</span><button onClick={()=>set(v=>v+1)} className="bg-secondary rounded-lg p-1.5 hover:bg-muted"><Plus size={14}/></button></div></div>
+                      <div key={lbl} className="flex flex-col gap-1.5"><label className="text-xs text-muted-foreground uppercase tracking-wide">{lbl}</label><input value={val} onChange={e=>set(Math.max(0, Number(e.target.value)||0))} type="number" inputMode="numeric" className="w-full bg-secondary border border-border rounded-xl px-3 py-2.5 text-lg font-semibold text-primary outline-none"/></div>
                     ))}
                   </div>
                   {shotAtt>0&&<p className="text-center text-sm text-muted-foreground">{shotMade>shotAtt?<span className="text-destructive">Made can&apos;t exceed attempted</span>:<span>= <strong className="text-primary">{Math.round((shotMade/shotAtt)*100)}%</strong> this session</span>}</p>}
@@ -1791,6 +2016,8 @@ export default function App() {
               )}
             </div>
           </div>
+
+          <HoursManager data={data} onUpdate={updateData} />
 
           <div className="bg-card border border-border rounded-2xl p-6">
             <div className="flex items-center justify-between mb-5"><div className="flex items-center gap-2"><TrendingUp size={14} className="text-primary"/><span className="text-xs uppercase tracking-wider text-muted-foreground">Daily Practice Duration</span></div><span className="text-xs text-muted-foreground">Last 7 days</span></div>
