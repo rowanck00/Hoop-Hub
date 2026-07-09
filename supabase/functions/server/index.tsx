@@ -2,14 +2,24 @@ import { Hono } from "npm:hono";
 import { cors } from "npm:hono/cors";
 import { logger } from "npm:hono/logger";
 import { createClient } from "npm:@supabase/supabase-js";
+import webpush from "npm:web-push";
 import * as kv from "./kv_store.tsx";
 
 const app = new Hono();
-const ADMIN_EMAILS = const ADMIN_EMAILS = ["rowanck00@gmail.com","kingof21kings@gmail.com"];
+const ADMIN_EMAILS = ["rowanck00@gmail.com", "kingof21kings@gmail.com"];
 const supabaseAdmin = createClient(
   Deno.env.get("SUPABASE_URL") || "",
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
 );
+const VAPID_PUBLIC_KEY = Deno.env.get("VAPID_PUBLIC_KEY") || "";
+const VAPID_PRIVATE_KEY = Deno.env.get("VAPID_PRIVATE_KEY") || "";
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(
+    Deno.env.get("VAPID_SUBJECT") || "mailto:rowanck00@gmail.com",
+    VAPID_PUBLIC_KEY,
+    VAPID_PRIVATE_KEY,
+  );
+}
 app.use("*", logger(console.log));
 app.use("/*", cors({
   origin: "*",
@@ -86,8 +96,32 @@ async function pushNotif(toUserId: string, notif: object) {
   if (!toUserId) return;
   const key = `notifs_${toUserId}`;
   const existing: any[] = (await kv.get(key)) || [];
-  const trimmed = [{ ...notif, id: crypto.randomUUID(), createdAt: new Date().toISOString(), read: false }, ...existing].slice(0, 50);
+  const saved = { ...notif, id: crypto.randomUUID(), createdAt: new Date().toISOString(), read: false };
+  const trimmed = [saved, ...existing].slice(0, 50);
   await kv.set(key, trimmed);
+  await sendPush(toUserId, saved);
+}
+
+async function sendPush(toUserId: string, notif: any) {
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return;
+  const key = `push_subs_${toUserId}`;
+  const subs: any[] = (await kv.get(key)) || [];
+  if (!subs.length) return;
+  const payload = JSON.stringify({
+    title: "Hoop Hub",
+    body: notif.message || "You have a new notification.",
+    url: "/?view=community",
+  });
+  const kept: any[] = [];
+  for (const sub of subs) {
+    try {
+      await webpush.sendNotification(sub, payload);
+      kept.push(sub);
+    } catch (err: any) {
+      if (![404, 410].includes(err?.statusCode)) kept.push(sub);
+    }
+  }
+  await kv.set(key, kept);
 }
 
 // ── Profile ───────────────────────────────────────────────────────────────────
@@ -206,8 +240,27 @@ app.get("/make-server-4cb0fb87/social/:userId", async (c) => {
 });
 
 // ── Notifications ─────────────────────────────────────────────────────────────
+app.get("/make-server-4cb0fb87/push/public-key", (c) => {
+  return c.json({ publicKey: VAPID_PUBLIC_KEY, enabled: !!(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) });
+});
+
+app.post("/make-server-4cb0fb87/push/subscribe", async (c) => {
+  const { userId, subscription } = await c.req.json();
+  const auth = await requireUser(c, userId);
+  if (auth.error) return auth.error;
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return c.json({ error: "Push keys are not configured" }, 400);
+  if (!subscription?.endpoint) return c.json({ error: "Invalid subscription" }, 400);
+  const key = `push_subs_${userId}`;
+  const existing: any[] = (await kv.get(key)) || [];
+  const withoutDupe = existing.filter(s => s?.endpoint !== subscription.endpoint);
+  await kv.set(key, [subscription, ...withoutDupe].slice(0, 8));
+  return c.json({ ok: true });
+});
+
 app.get("/make-server-4cb0fb87/notifications/:userId", async (c) => {
   const userId = c.req.param("userId");
+  const auth = await requireUser(c, userId);
+  if (auth.error) return auth.error;
   const notifs = (await kv.get(`notifs_${userId}`)) || [];
   return c.json({ notifications: notifs });
 });
@@ -281,7 +334,7 @@ app.get("/make-server-4cb0fb87/posts", async (c) => {
   const blocked = await getBlocked(viewerId);
   const allPosts = await kv.getByPrefix("post_");
   const topLevel = allPosts
-    .filter((p: any) => p && !p.replyTo && !p.removed && (p.reportCount || 0) < 3 && !blocked.includes(p.userId))
+    .filter((p: any) => p && !p.replyTo && !p.removed && !blocked.includes(p.userId))
     .sort((a: any, b: any) => scorePost(b) - scorePost(a)) // relevance sort
     .slice(0, 60);
 
@@ -313,7 +366,7 @@ app.get("/make-server-4cb0fb87/posts/:postId/replies", async (c) => {
   const blocked = await getBlocked(viewerId);
   const allPosts = await kv.getByPrefix("post_");
   const replies = allPosts
-    .filter((p: any) => p && p.replyTo === postId && !p.removed && (p.reportCount || 0) < 3 && !blocked.includes(p.userId))
+    .filter((p: any) => p && p.replyTo === postId && !p.removed && !blocked.includes(p.userId))
     .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   const enriched = await Promise.all(replies.map(async (post: any) => {
     const profile = await kv.get(`profile_${post.userId}`);
@@ -388,7 +441,7 @@ app.post("/make-server-4cb0fb87/posts/:postId/report", async (c) => {
     postId,
     message: `Post reported${reason ? `: ${cleanText(reason, 120)}` : ""}`,
   })));
-  return c.json({ ok: true, hidden: false, reportCount: post.reportCount });
+  return c.json({ ok: true, hidden: false, reportCount: post.reportCount, adminCount: admins.length });
 });
 
 app.post("/make-server-4cb0fb87/block", async (c) => {

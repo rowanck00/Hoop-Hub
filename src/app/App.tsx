@@ -77,7 +77,7 @@ const TEAM_LEVELS = ["Men's League", "High School", "College", "Pro / Overseas",
 const SERVER = `https://${projectId}.supabase.co/functions/v1/make-server-4cb0fb87`;
 const APP_NAME = "HOOP HUB";
 const APP_TAGLINE = "Track your game. Own your grind.";
-const ADMIN_EMAILS = ["kingof21kings@gmail.com"];
+const ADMIN_EMAILS = ["rowanck00@gmail.com", "kingof21kings@gmail.com"];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function makeDate(d: number) { return new Date(Date.now() - d * 86400000).toISOString().slice(0, 10); }
@@ -263,6 +263,29 @@ const markNotifsRead = (userId: string) => apiPost(`/notifications/${userId}/rea
 const clearNotifs = (userId: string) => bg(`${SERVER}/notifications/${userId}`, { method: "DELETE" });
 const deleteTeam = (id: string) => bg(`${SERVER}/teams/${id}`, { method: "DELETE" });
 
+function urlBase64ToUint8Array(base64: string) {
+  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+  const raw = atob((base64 + padding).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from([...raw].map(ch => ch.charCodeAt(0)));
+}
+async function enablePushNotifications(userId: string) {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+    return { ok: false, error: "Push notifications are not supported on this browser." };
+  }
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") return { ok: false, error: "Notifications are blocked for this site." };
+  const keyRes = await apiFetch<{ publicKey?: string }>("/push/public-key", {});
+  if (!keyRes.publicKey) return { ok: false, error: "Push keys are not set up on the server yet." };
+  const registration = await navigator.serviceWorker.register("/sw.js");
+  const existing = await registration.pushManager.getSubscription();
+  const subscription = existing || await registration.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToUint8Array(keyRes.publicKey),
+  });
+  const saved = await apiPost("/push/subscribe", { userId, subscription });
+  return saved?.ok ? { ok: true } : { ok: false, error: saved?.error || "Could not save this device for notifications." };
+}
+
 // ─── Chart Tip ────────────────────────────────────────────────────────────────
 const ChartTip = ({ active, payload, label, unit = "" }: any) => {
   if (!active || !payload?.length) return null;
@@ -308,6 +331,7 @@ function PostCard({ post, currentUserId, currentUserName, canModerate = false, o
   const [replies, setReplies] = useState<PostData[]>([]);
   const [loadingReplies, setLoadingReplies] = useState(false);
   const [reported, setReported] = useState(false);
+  const [reportMsg, setReportMsg] = useState("");
   const liked = !!currentUserId && post.likes.includes(currentUserId);
   const reposted = !!currentUserId && post.reposts.includes(currentUserId);
 
@@ -330,7 +354,12 @@ function PostCard({ post, currentUserId, currentUserName, canModerate = false, o
   async function handleReport() {
     if (!currentUserId) return;
     const res = await apiPost(`/posts/${post.id}/report`, { userId: currentUserId, reason: "Reported in app" });
-    if (res?.ok) setReported(true);
+    if (res?.ok) {
+      setReported(true);
+      setReportMsg(res.adminCount > 0 ? "Sent to admins for review." : "Report saved. No admin profile was found yet.");
+    } else {
+      setReportMsg(res?.error || "Report could not be sent. Try again.");
+    }
   }
   async function handleBlock() {
     if (!currentUserId || currentUserId === post.userId) return;
@@ -339,13 +368,13 @@ function PostCard({ post, currentUserId, currentUserName, canModerate = false, o
   }
 
   return (
-    <div className={`bg-card border border-border rounded-2xl p-4 space-y-3 ${isReply ? "ml-4 border-l-2 border-l-primary/30" : ""}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-2.5">
+    <div className={`bg-card border border-border rounded-2xl p-3 sm:p-4 space-y-3 max-w-full overflow-hidden ${isReply ? "ml-2 sm:ml-4 border-l-2 border-l-primary/30" : ""}`}>
+      <div className="flex items-start justify-between gap-3 min-w-0">
+        <div className="flex items-center gap-2.5 min-w-0">
           <Avatar p={post.profile} size={9} />
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-semibold text-sm">{post.profile?.firstName} {post.profile?.lastName}</span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 min-w-0 flex-wrap">
+              <span className="font-semibold text-sm truncate max-w-[12rem]">{post.profile?.firstName} {post.profile?.lastName}</span>
               {post.profile?.position && <span className="text-xs text-primary bg-primary/10 px-1.5 py-0.5 rounded-md">{post.profile.position}</span>}
             </div>
             <span className="text-xs text-muted-foreground">{timeAgo(post.createdAt)}</span>
@@ -355,11 +384,11 @@ function PostCard({ post, currentUserId, currentUserName, canModerate = false, o
           <button onClick={async () => { await bg(`${SERVER}/posts/${post.id}`, { method: "DELETE" }); onDelete(post.id); }} className="text-muted-foreground hover:text-destructive p-1"><Trash2 size={13} /></button>
         )}
       </div>
-      {post.content && <p className="text-sm leading-relaxed whitespace-pre-wrap">{post.content}</p>}
+      {post.content && <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{post.content}</p>}
       {post.videoId ? <div className="aspect-video rounded-xl overflow-hidden bg-zinc-900"><iframe src={`https://www.youtube.com/embed/${post.videoId}`} title="clip" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen className="w-full h-full" /></div>
         : isDirectVideoUrl(post.videoUrl) && <div className="aspect-video rounded-xl overflow-hidden bg-zinc-900"><video src={post.videoUrl} controls className="w-full h-full object-contain" /></div>}
       {post.quotedPost && <QuotedPost post={post.quotedPost} />}
-      <div className="flex items-center gap-1 pt-1 border-t border-border">
+      <div className="flex items-center gap-1 pt-1 border-t border-border flex-wrap">
         <button onClick={handleLike} disabled={!currentUserId} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${liked ? "text-red-400 bg-red-400/10" : "text-muted-foreground hover:text-red-400 hover:bg-red-400/10"} disabled:cursor-not-allowed`}>
           <Heart size={13} className={liked ? "fill-current" : ""} />{post.likeCount > 0 && <span>{post.likeCount}</span>}
         </button>
@@ -375,11 +404,12 @@ function PostCard({ post, currentUserId, currentUserName, canModerate = false, o
         <button onClick={handleReport} disabled={!currentUserId || reported} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-amber-400 hover:bg-amber-400/10 disabled:cursor-not-allowed">{reported ? "Reported" : "Report"}</button>
         {currentUserId && currentUserId !== post.userId && <button onClick={handleBlock} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10">Block</button>}
         {post.replyCount > 0 && !isReply && (
-          <button onClick={handleShowReplies} className="ml-auto text-xs text-muted-foreground hover:text-primary">
+          <button onClick={handleShowReplies} className="sm:ml-auto text-xs text-muted-foreground hover:text-primary px-2 py-1">
             {loadingReplies ? "Loading…" : showReplies ? "Hide" : `${post.replyCount} repl${post.replyCount === 1 ? "y" : "ies"}`}
           </button>
         )}
       </div>
+      {reportMsg && <p className="text-xs text-muted-foreground bg-secondary border border-border rounded-xl px-3 py-2">{reportMsg}</p>}
       {showReplies && replies.length > 0 && (
         <div className="space-y-3 pt-1">
           {replies.map(r => <PostCard key={r.id} post={r} currentUserId={currentUserId} currentUserName={currentUserName} canModerate={canModerate} onReply={onReply} onQuote={onQuote}
@@ -436,16 +466,16 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
   }
 
   return (
-    <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
+    <div className="bg-card border border-border rounded-2xl p-3 sm:p-4 space-y-3 max-w-full overflow-hidden">
       {(replyTo || quotedPost) && (
         <p className="text-xs text-muted-foreground flex items-center gap-1.5">
           {replyTo ? <><MessageCircle size={11} /> Replying to <strong className="text-foreground">{replyTo.profile?.firstName}</strong></> : <><Quote size={11} /> Quoting <strong className="text-foreground">{quotedPost?.profile?.firstName}</strong></>}
         </p>
       )}
-      <div className="flex gap-3">
+      <div className="flex gap-3 min-w-0">
         <Avatar p={{ firstName: profile.firstName, lastName: profile.lastName, position: profile.position, avatarUrl: profile.avatarUrl, role: profile.role }} size={9} />
         <textarea autoFocus value={content} onChange={e => setContent(e.target.value)} placeholder={placeholder} rows={3}
-          className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground resize-none outline-none" />
+          className="flex-1 min-w-0 bg-transparent text-sm text-foreground placeholder:text-muted-foreground resize-none outline-none" />
       </div>
       {videoPreview && (
         <div className="space-y-2">
@@ -455,7 +485,7 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
       )}
       {videoError && <p className="text-xs text-amber-400 bg-amber-400/10 rounded-xl p-3">{videoError}</p>}
       {quotedPost && <QuotedPost post={quotedPost} />}
-      <div className="flex items-center justify-between pt-1 border-t border-border">
+      <div className="flex items-center justify-between gap-2 pt-1 border-t border-border flex-wrap">
         <label className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 cursor-pointer">
           <Video size={13} /> Video
           <input type="file" accept="video/*" className="hidden" onChange={e => chooseVideo(e.target.files?.[0])} />
@@ -699,6 +729,7 @@ function TeamsTab({ currentUserId, currentProfile }: { currentUserId?: string; c
 function NotifPanel({ userId, onClose }: { userId: string; onClose: () => void }) {
   const [notifs, setNotifs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pushMsg, setPushMsg] = useState("");
 
   useEffect(() => {
     fetchNotifs(userId).then(n => { setNotifs(n); setLoading(false); });
@@ -706,6 +737,11 @@ function NotifPanel({ userId, onClose }: { userId: string; onClose: () => void }
   }, [userId]);
 
   const icons: Record<string, string> = { like: "❤️", repost: "🔄", reply: "💬", follow: "👤", tag: "🏷️" };
+  async function turnOnPush() {
+    setPushMsg("Setting up this device...");
+    const res = await enablePushNotifications(userId);
+    setPushMsg(res.ok ? "Outside-app notifications are on for this device." : res.error || "Could not turn on notifications.");
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
@@ -714,6 +750,12 @@ function NotifPanel({ userId, onClose }: { userId: string; onClose: () => void }
         <div className="flex items-center justify-between px-5 py-4 border-b border-border sticky top-0 bg-card">
           <h2 className="font-black text-lg" style={{ fontFamily: "'Roboto Slab',serif" }}>Notifications</h2>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X size={20} /></button>
+        </div>
+        <div className="px-5 py-3 border-b border-border space-y-2">
+          <button onClick={turnOnPush} className="w-full bg-primary text-primary-foreground rounded-xl px-4 py-2 text-sm font-semibold hover:bg-accent">
+            Enable phone alerts
+          </button>
+          {pushMsg && <p className="text-xs text-muted-foreground">{pushMsg}</p>}
         </div>
         {loading ? <div className="text-center py-12 text-muted-foreground text-sm">Loading…</div>
           : notifs.length === 0 ? (
@@ -782,14 +824,14 @@ function CommunityPage({ currentUserId, currentProfile, onBack }: { currentUserI
 
   return (
     <div className="min-h-screen bg-background" style={{ fontFamily: "'DM Sans',sans-serif" }}>
-      <header className="border-b border-border px-6 py-5 max-w-5xl mx-auto flex items-center gap-3">
+      <header className="border-b border-border px-4 sm:px-6 py-5 max-w-5xl mx-auto flex items-center gap-3 min-w-0">
         {onBack && <button onClick={onBack} className="text-muted-foreground hover:text-foreground"><ChevronLeft size={20} /></button>}
         <span className="text-2xl">🏀</span>
-        <div><h1 className="text-xl font-black tracking-tight leading-none" style={{ fontFamily: "'Roboto Slab',serif" }}>COMMUNITY</h1><p className="text-xs text-muted-foreground uppercase tracking-widest">Players · Teams · Coaches · Scouts</p></div>
+        <div className="min-w-0"><h1 className="text-xl font-black tracking-tight leading-none" style={{ fontFamily: "'Roboto Slab',serif" }}>COMMUNITY</h1><p className="text-xs text-muted-foreground uppercase tracking-widest break-words">Players · Teams · Coaches · Scouts</p></div>
       </header>
-      <main className="max-w-5xl mx-auto px-6 py-6 space-y-5">
-        <div className="flex gap-1 bg-card border border-border rounded-xl p-1 w-fit">
-          {(["feed", "players", "teams"] as const).map(t => <button key={t} onClick={() => setTab(t)} className={`px-5 py-2 rounded-lg text-sm font-semibold transition-colors capitalize ${tab === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>{t}</button>)}
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-5 overflow-x-hidden">
+        <div className="flex gap-1 bg-card border border-border rounded-xl p-1 w-full sm:w-fit">
+          {(["feed", "players", "teams"] as const).map(t => <button key={t} onClick={() => setTab(t)} className={`flex-1 sm:flex-none px-3 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-colors capitalize ${tab === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>{t}</button>)}
         </div>
         {tab === "feed"    && <FeedTab currentUserId={currentUserId} currentProfile={currentProfile} />}
         {tab === "players" && <PlayersTab onSelect={setSelected} />}
@@ -1829,6 +1871,22 @@ export default function App() {
       document.removeEventListener("visibilitychange", retry);
     };
   }, [userId, cloudLoaded]);
+
+  useEffect(() => {
+    if (!userId || authState !== "ready") return;
+    let cancelled = false;
+    const refresh = () => fetchNotifs(userId)
+      .then(n => { if (!cancelled) setUnreadCount(n.filter((x: any) => !x.read).length); })
+      .catch(() => {});
+    refresh();
+    const id = window.setInterval(refresh, 30000);
+    window.addEventListener("focus", refresh);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [userId, authState]);
 
   function currentTimerSec() {
     if (!timerOn || timerStartedAtRef.current === null) return timerSec;
