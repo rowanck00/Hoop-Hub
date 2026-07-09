@@ -52,10 +52,15 @@ interface SessionData { date: string; minutes: number; }
 interface ShotEntry { made: number; attempted: number; date: string; }
 interface StrengthEntry { date: string; weight: number; reps: number; }
 interface StrengthExercise { name: string; unit: "lbs" | "kg"; history: StrengthEntry[]; }
+interface TrainingPlanSettings {
+  age: string; experience: string; inSeason: boolean; practicesPerWeek: string;
+  gamesPerWeek: string; equipment: string; goal: string; kneePain: boolean; notes: string;
+}
 interface AppData {
   streak: number; lastPracticeDate: string;
   shots: ShotEntry[]; sessions: SessionData[];
   strength: StrengthExercise[];
+  trainingPlan?: TrainingPlanSettings;
 }
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -64,7 +69,7 @@ const TEAM_LEVELS = ["Men's League", "High School", "College", "Pro / Overseas",
 const SERVER = `https://${projectId}.supabase.co/functions/v1/make-server-4cb0fb87`;
 const APP_NAME = "HOOP HUB";
 const APP_TAGLINE = "Track your game. Own your grind.";
-const ADMIN_EMAILS = ["rowanck00@gmail.com"];
+const ADMIN_EMAILS = ["kingof21kings@gmail.com"];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function makeDate(d: number) { return new Date(Date.now() - d * 86400000).toISOString().slice(0, 10); }
@@ -106,7 +111,10 @@ function defaultStrength(): StrengthExercise[] {
     { name: "Overhead Press", unit: "lbs", history: [] },
   ];
 }
-function emptyData(): AppData { return { streak: 0, lastPracticeDate: "", shots: [], sessions: [], strength: defaultStrength() }; }
+function emptyTrainingPlan(): TrainingPlanSettings {
+  return { age: "15", experience: "Intermediate", inSeason: false, practicesPerWeek: "3", gamesPerWeek: "1", equipment: "Ball, hoop", goal: "Shooting", kneePain: false, notes: "" };
+}
+function emptyData(): AppData { return { streak: 0, lastPracticeDate: "", shots: [], sessions: [], strength: defaultStrength(), trainingPlan: emptyTrainingPlan() }; }
 function initials(p?: MiniProfile | null) { return p ? `${p.firstName?.[0] ?? ""}${p.lastName?.[0] ?? ""}`.toUpperCase() : "?"; }
 
 // ─── Rank system ──────────────────────────────────────────────────────────────
@@ -143,8 +151,15 @@ const clearPendingProfile = (uid: string) => { try { localStorage.removeItem(`hh
 const clearPendingData    = (uid: string) => { try { localStorage.removeItem(`hh_pending_data_${uid}`); } catch {} };
 
 // ─── Background API (never blocks the UI) ────────────────────────────────────
-const bg = (url: string, opts?: RequestInit) =>
-  fetch(url, { signal: AbortSignal.timeout(6000), headers: { "Content-Type": "application/json" }, ...opts }).catch(() => {});
+async function authHeaders() {
+  const { data } = await supabase.auth.getSession();
+  return {
+    "Content-Type": "application/json",
+    ...(data.session?.access_token ? { Authorization: `Bearer ${data.session.access_token}` } : {}),
+  };
+}
+const bg = async (url: string, opts?: RequestInit) =>
+  fetch(url, { signal: AbortSignal.timeout(6000), ...opts, headers: { ...(await authHeaders()), ...(opts?.headers || {}) } }).catch(() => {});
 
 async function saveProfileCloud(userId: string, p: UserProfile) {
   saveLocalProfile(p);
@@ -168,11 +183,11 @@ async function flushPendingSync(userId: string) {
 }
 
 async function apiFetch<T>(path: string, fallback: T): Promise<T> {
-  try { const r = await fetch(`${SERVER}${path}`, { signal: AbortSignal.timeout(6000) }); return await r.json(); }
+  try { const r = await fetch(`${SERVER}${path}`, { signal: AbortSignal.timeout(6000), headers: await authHeaders() }); return await r.json(); }
   catch { return fallback as any; }
 }
 async function apiPost(path: string, body: any) {
-  try { const r = await fetch(`${SERVER}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(6000) }); return await r.json(); }
+  try { const r = await fetch(`${SERVER}${path}`, { method: "POST", headers: await authHeaders(), body: JSON.stringify(body), signal: AbortSignal.timeout(6000) }); return await r.json(); }
   catch { return null; }
 }
 
@@ -958,12 +973,16 @@ function ViewHero({ img, title, sub }: { img: string; title: string; sub: string
 
 function FlightTimeTool() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const slowTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const speedRef = useRef(0.25);
   const [videoUrl, setVideoUrl] = useState("");
   const [takeoff, setTakeoff] = useState<number | null>(null);
   const [landing, setLanding] = useState<number | null>(null);
   const [fps, setFps] = useState(240);
   const [speed, setSpeed] = useState(0.25);
   const [videoTime, setVideoTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [slowPlaying, setSlowPlaying] = useState(false);
   const flight = takeoff !== null && landing !== null && landing > takeoff ? landing - takeoff : 0;
   const vertical = flight ? verticalFromFlightTime(flight) : 0;
 
@@ -974,29 +993,62 @@ function FlightTimeTool() {
     video.playbackRate = speed;
   }, [speed]);
 
-  useEffect(() => { applySpeed(); }, [applySpeed, videoUrl]);
+  useEffect(() => { speedRef.current = speed; applySpeed(); }, [applySpeed, speed, videoUrl]);
+  useEffect(() => () => {
+    if (slowTimerRef.current) clearInterval(slowTimerRef.current);
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
+  }, [videoUrl]);
+
+  function stopSlowPlay() {
+    if (slowTimerRef.current) clearInterval(slowTimerRef.current);
+    slowTimerRef.current = null;
+    setSlowPlaying(false);
+  }
+  function seekTo(time: number) {
+    const video = videoRef.current;
+    if (!video) return;
+    const max = Number.isFinite(video.duration) ? video.duration : duration || Number.MAX_SAFE_INTEGER;
+    const next = Math.max(0, Math.min(max, time));
+    video.currentTime = next;
+    setVideoTime(next);
+  }
+  function toggleSlowPlay() {
+    const video = videoRef.current;
+    if (!video) return;
+    if (slowTimerRef.current) { stopSlowPlay(); return; }
+    video.pause();
+    applySpeed();
+    setSlowPlaying(true);
+    slowTimerRef.current = setInterval(() => {
+      const current = videoRef.current;
+      if (!current) { stopSlowPlay(); return; }
+      const next = current.currentTime + (1 / 30) * speedRef.current;
+      const max = Number.isFinite(current.duration) ? current.duration : duration;
+      if (max && next >= max) { seekTo(max); stopSlowPlay(); return; }
+      seekTo(next);
+    }, 33);
+  }
 
   function loadVideo(file?: File) {
     if (!file) return;
+    stopSlowPlay();
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     setVideoUrl(URL.createObjectURL(file));
     setTakeoff(null);
     setLanding(null);
     setVideoTime(0);
+    setDuration(0);
   }
   function markTakeoff() { if (videoRef.current) setTakeoff(videoRef.current.currentTime); }
   function markLanding() { if (videoRef.current) setLanding(videoRef.current.currentTime); }
   function stepFrame(direction: -1 | 1) {
     const video = videoRef.current;
     if (!video) return;
+    stopSlowPlay();
     video.pause();
     applySpeed();
-    const step = 1 / fps;
-    const duration = Number.isFinite(video.duration) ? video.duration : Number.MAX_SAFE_INTEGER;
-    const next = Math.max(0, Math.min(duration, video.currentTime + direction * step));
-    video.currentTime = next;
-    setVideoTime(next);
-    window.setTimeout(() => setVideoTime(video.currentTime), 60);
+    seekTo(video.currentTime + direction / fps);
+    window.setTimeout(() => setVideoTime(videoRef.current?.currentTime || 0), 80);
   }
 
   return (
@@ -1017,35 +1069,61 @@ function FlightTimeTool() {
           <video
             ref={videoRef}
             src={videoUrl}
-            controls
             playsInline
-            onLoadedMetadata={() => { applySpeed(); setVideoTime(videoRef.current?.currentTime || 0); }}
-            onPlay={applySpeed}
-            onPlaying={applySpeed}
+            preload="metadata"
+            onLoadedMetadata={e => { applySpeed(); setDuration(e.currentTarget.duration || 0); setVideoTime(e.currentTarget.currentTime || 0); }}
+            onPlay={() => { stopSlowPlay(); if (videoRef.current) videoRef.current.playbackRate = 1; }}
+            onPause={() => setSlowPlaying(false)}
             onTimeUpdate={e => setVideoTime(e.currentTarget.currentTime)}
             onSeeked={e => setVideoTime(e.currentTarget.currentTime)}
             className="w-full max-h-80 rounded-xl bg-black object-contain"
           />
+          <div className="bg-background border border-border rounded-xl p-3 space-y-3">
+            <input
+              type="range"
+              min={0}
+              max={duration || 0}
+              step={1 / fps}
+              value={Math.min(videoTime, duration || videoTime)}
+              onChange={e => { stopSlowPlay(); seekTo(Number(e.target.value)); }}
+              className="w-full accent-primary"
+            />
+            <div className="grid grid-cols-[auto_1fr_auto] gap-2 items-center">
+              <button type="button" onClick={toggleSlowPlay} className="bg-primary text-primary-foreground rounded-xl px-4 py-2 text-sm font-semibold hover:bg-accent flex items-center gap-2">
+                {slowPlaying ? <Pause size={14} /> : <Play size={14} />} {slowPlaying ? "Pause" : "Slow Play"}
+              </button>
+              <p className="text-xs text-muted-foreground text-center">Current: {videoTime.toFixed(3)}s / {(duration || 0).toFixed(3)}s</p>
+              <button type="button" onClick={() => { stopSlowPlay(); videoRef.current?.paused ? videoRef.current.play().catch(() => {}) : videoRef.current?.pause(); }} className="bg-secondary text-secondary-foreground rounded-xl px-4 py-2 text-sm font-semibold hover:bg-muted">
+                Normal
+              </button>
+            </div>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2">
             <div className="flex flex-wrap items-center gap-2 bg-background border border-border rounded-xl p-2">
               <span className="text-xs text-muted-foreground px-1">Slow-mo</span>
               {[0.25, 0.5, 1].map(rate => (
-                <button key={rate} onClick={() => setSpeed(rate)} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${speed === rate ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground hover:bg-muted"}`}>
+                <button type="button" key={rate} onClick={() => setSpeed(rate)} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${speed === rate ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground hover:bg-muted"}`}>
                   {rate}x
                 </button>
               ))}
               <select value={fps} onChange={e => setFps(Number(e.target.value))} className="ml-auto bg-secondary border border-border rounded-lg px-2 py-1.5 text-xs text-foreground outline-none">
+                <option value={30}>30 fps</option>
                 <option value={60}>60 fps</option>
                 <option value={120}>120 fps</option>
                 <option value={240}>240 fps</option>
               </select>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <button type="button" onClick={() => stepFrame(-1)} className="bg-secondary text-secondary-foreground rounded-xl px-4 py-2 text-sm font-black hover:bg-muted" aria-label="Previous frame">&lt;</button>
-              <button type="button" onClick={() => stepFrame(1)} className="bg-secondary text-secondary-foreground rounded-xl px-4 py-2 text-sm font-black hover:bg-muted" aria-label="Next frame">&gt;</button>
+              <button type="button" onClick={() => stepFrame(-1)} className="bg-secondary text-secondary-foreground rounded-xl px-4 py-2 text-sm font-black hover:bg-muted" aria-label="Previous frame">-1 frame</button>
+              <button type="button" onClick={() => stepFrame(1)} className="bg-secondary text-secondary-foreground rounded-xl px-4 py-2 text-sm font-black hover:bg-muted" aria-label="Next frame">+1 frame</button>
             </div>
           </div>
           <p className="text-xs text-muted-foreground text-center">Current: {videoTime.toFixed(3)}s • Arrow step: {(1 / fps).toFixed(4)}s</p>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={() => { stopSlowPlay(); seekTo(videoTime - 5 / fps); }} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">-5 frames</button>
+            <button type="button" onClick={() => { stopSlowPlay(); seekTo(videoTime + 5 / fps); }} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">+5 frames</button>
+          </div>
+          <p className="text-xs text-muted-foreground text-center">If 240 fps barely moves, try 60 fps. Some phones export slow-mo as a 30 fps playback file.</p>
           <div className="grid grid-cols-2 gap-2">
             <button onClick={markTakeoff} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Takeoff</button>
             <button onClick={markLanding} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Landing</button>
@@ -1065,7 +1143,82 @@ function FlightTimeTool() {
   );
 }
 
-function TrainingView({ data }: { data: AppData }) {
+function buildTrainingPlan(plan: TrainingPlanSettings) {
+  const age = Number(plan.age) || 15;
+  const practices = Math.max(0, Number(plan.practicesPerWeek) || 0);
+  const games = Math.max(0, Number(plan.gamesPerWeek) || 0);
+  const beginner = plan.experience === "Beginner";
+  const advanced = plan.experience === "Advanced";
+  const heavyWeek = practices + games >= 6;
+  const lowImpact = plan.kneePain || heavyWeek || age < 14;
+  const sessions = plan.inSeason ? Math.max(2, Math.min(4, 5 - games)) : advanced ? 5 : beginner ? 3 : 4;
+  const minutes = lowImpact ? 35 : plan.inSeason ? 45 : advanced ? 70 : 55;
+  const goal = plan.goal.toLowerCase();
+  const skillFocus = goal.includes("shoot") ? ["Form shooting close to rim", "Spot-up makes", "Game-speed threes", "Free throws under fatigue"]
+    : goal.includes("handle") ? ["Pound dribbles", "Change of pace", "Combo moves", "Pressure retreat dribbles"]
+    : goal.includes("vert") || goal.includes("athletic") ? ["Landing mechanics", "Pogo jumps", "Approach jumps", "Core stiffness"]
+    : goal.includes("def") ? ["Stance holds", "Closeout footwork", "Slide sprints", "Contain angles"]
+    : ["Ball handling", "Finishing", "Shooting", "Conditioning"];
+  const strength = lowImpact ? "2 low-impact strength days: hips, hamstrings, calves, core, and controlled squats. Avoid painful jumping."
+    : "2 strength days: squat/hinge pattern, single-leg work, calves, core, and mobility.";
+  return {
+    sessions,
+    minutes,
+    weekly: [
+      `Do ${sessions} training sessions per week at about ${minutes} minutes each.`,
+      plan.inSeason ? "Keep extra work lighter because games/practices already add load." : "Use one harder skill day, one strength day, and one conditioning day each week.",
+      strength,
+      lowImpact ? "Knee pain rule: no drill should make pain worse. Swap jumps for form shooting, biking, mobility, and controlled strength." : "Add 10-15 minutes of athletic work after warmup on non-game days.",
+    ],
+    session: [
+      "Warmup: 5-8 min movement, mobility, and easy ball handling.",
+      `Main skill: ${skillFocus.slice(0, 3).join(", ")}.`,
+      `Goal block: ${skillFocus[3] || "free throws"} for 10-15 focused minutes.`,
+      "Finish: track makes, attempts, or time so your dashboard updates.",
+    ],
+  };
+}
+
+function TrainingPlanBuilder({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData) => void }) {
+  const plan = data.trainingPlan || emptyTrainingPlan();
+  const generated = buildTrainingPlan(plan);
+  const set = (k: keyof TrainingPlanSettings, v: string | boolean) => onUpdate({ ...data, trainingPlan: { ...plan, [k]: v } });
+  const input = "bg-secondary border border-border rounded-xl px-3 py-2 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary w-full";
+  const label = "text-xs text-muted-foreground uppercase tracking-wider mb-1 block";
+
+  return (
+    <div className="bg-card border border-border rounded-2xl p-6 space-y-5">
+      <div className="flex items-center gap-2"><Edit3 size={14} className="text-primary" /><span className="text-xs uppercase tracking-wider text-muted-foreground">Custom Training Plan</span></div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div><label className={label}>Age</label><input value={plan.age} onChange={e => set("age", e.target.value)} type="number" className={input} /></div>
+        <div><label className={label}>Experience</label><select value={plan.experience} onChange={e => set("experience", e.target.value)} className={input}>{["Beginner","Intermediate","Advanced"].map(x => <option key={x}>{x}</option>)}</select></div>
+        <div><label className={label}>Practices/week</label><input value={plan.practicesPerWeek} onChange={e => set("practicesPerWeek", e.target.value)} type="number" className={input} /></div>
+        <div><label className={label}>Games/week</label><input value={plan.gamesPerWeek} onChange={e => set("gamesPerWeek", e.target.value)} type="number" className={input} /></div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div><label className={label}>Equipment</label><input value={plan.equipment} onChange={e => set("equipment", e.target.value)} placeholder="Ball, hoop, weights..." className={input} /></div>
+        <div><label className={label}>Goal</label><select value={plan.goal} onChange={e => set("goal", e.target.value)} className={input}>{["Shooting","Handles","Vertical / athleticism","Defense","All-around"].map(x => <option key={x}>{x}</option>)}</select></div>
+        <div className="grid grid-cols-2 gap-2">
+          <button onClick={() => set("inSeason", !plan.inSeason)} className={`rounded-xl px-3 py-2 text-sm font-semibold ${plan.inSeason ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"}`}>In season: {plan.inSeason ? "Yes" : "No"}</button>
+          <button onClick={() => set("kneePain", !plan.kneePain)} className={`rounded-xl px-3 py-2 text-sm font-semibold ${plan.kneePain ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"}`}>Knee pain: {plan.kneePain ? "Yes" : "No"}</button>
+        </div>
+      </div>
+      <div><label className={label}>Your notes</label><textarea value={plan.notes} onChange={e => set("notes", e.target.value)} placeholder="Write drills, schedule limits, coach notes, or things you want in the plan..." rows={3} className={`${input} resize-none`} /></div>
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="bg-background border border-border rounded-xl p-4">
+          <p className="text-sm font-black text-primary mb-2">{generated.sessions} days/week • {generated.minutes} min/session</p>
+          {generated.weekly.map(x => <p key={x} className="text-sm text-muted-foreground mb-2">{x}</p>)}
+        </div>
+        <div className="bg-background border border-border rounded-xl p-4">
+          <p className="text-sm font-black text-primary mb-2">Session template</p>
+          {generated.session.map(x => <p key={x} className="text-sm text-muted-foreground mb-2">{x}</p>)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TrainingView({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData) => void }) {
   const weeklyData = Array.from({ length: 8 }, (_, wi) => {
     const wS = 7 * (7 - wi), wE = wS - 7;
     const total = data.sessions.filter(s => { const ago = Math.floor((Date.now() - new Date(s.date + "T12:00:00").getTime()) / 86400000); return ago < wS && ago >= wE; }).reduce((a, b) => a + b.minutes, 0);
@@ -1083,6 +1236,7 @@ function TrainingView({ data }: { data: AppData }) {
   return (
     <div className="space-y-6">
       <ViewHero img="1519861531473-9200262188bf" title="Training" sub="Long-term progress" />
+      <TrainingPlanBuilder data={data} onUpdate={onUpdate} />
       <FlightTimeTool />
       <div className="bg-card border border-border rounded-2xl p-6">
         <div className="flex items-center gap-2 mb-5"><Clock size={14} className="text-primary" /><span className="text-xs uppercase tracking-wider text-muted-foreground">Weekly Volume (last 8 weeks)</span></div>
@@ -1258,6 +1412,7 @@ export default function App() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [sharedPlayer, setSharedPlayer] = useState<CommunityPlayer | null>(null);
   const [shareCopied, setShareCopied] = useState(false);
+  const [cloudLoaded, setCloudLoaded] = useState(false);
 
   const urlParams = new URLSearchParams(window.location.search);
   const playerIdParam = urlParams.get("player");
@@ -1279,8 +1434,8 @@ export default function App() {
 
   useEffect(() => {
     async function loadUser(uid: string, email: string) {
+      setCloudLoaded(false);
       setUserId(uid); setUserEmail(email);
-      await flushPendingSync(uid);
       // 1. Try localStorage first (instant)
       const lp = localProfile(uid);
       const ld = localData(uid);
@@ -1299,27 +1454,33 @@ export default function App() {
         const serverProfile = profileRes.profile ? withRole({ ...profileRes.profile, email: profileRes.profile.email || email }) : null;
         if (serverProfile) {
           const cloudData = dataRes.data || ld || emptyData();
+          clearPendingProfile(uid);
+          if (dataRes.data) clearPendingData(uid);
           saveLocalProfile(serverProfile);
           saveLocalData(uid, cloudData);
           setProfile(serverProfile);
           setData(cloudData);
           setAuthState("ready");
+          setCloudLoaded(true);
           return;
         }
         if (lp) {
           await saveProfileCloud(uid, withRole({ ...lp, email: lp.email || email }));
           if (ld) await saveDataCloud(uid, ld);
+          setCloudLoaded(true);
           return;
         }
-      } catch { if (lp) return; }
+      } catch { if (lp) { setCloudLoaded(true); return; } }
       // 3. No profile found anywhere — new user needs to set up
       setAuthState("needs_profile");
+      setCloudLoaded(true);
     }
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_OUT" || !session) {
         setAuthState("unauthenticated");
         setUserId(null); setProfile(null);
+        setCloudLoaded(false);
         return;
       }
       if (event === "SIGNED_IN" || event === "INITIAL_SESSION" || event === "TOKEN_REFRESHED") {
@@ -1330,7 +1491,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!userId) return;
+    if (!userId || !cloudLoaded) return;
     const retry = () => { void flushPendingSync(userId); };
     window.addEventListener("focus", retry);
     window.addEventListener("online", retry);
@@ -1341,7 +1502,7 @@ export default function App() {
       window.removeEventListener("online", retry);
       document.removeEventListener("visibilitychange", retry);
     };
-  }, [userId]);
+  }, [userId, cloudLoaded]);
 
   function currentTimerSec() {
     if (!timerOn || timerStartedAtRef.current === null) return timerSec;
@@ -1491,7 +1652,7 @@ export default function App() {
       {showNotifs && userId && <NotifPanel userId={userId} onClose={() => { setShowNotifs(false); setUnreadCount(0); }} />}
 
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
-        {view==="training" && <TrainingView data={data}/>}
+        {view==="training" && <TrainingView data={data} onUpdate={updateData}/>}
         {view==="strength" && <StrengthView data={data} onUpdate={updateData}/>}
         {view==="community" && <CommunityPage currentUserId={userId??undefined} currentProfile={profile} onBack={()=>setView("home")}/>}
 

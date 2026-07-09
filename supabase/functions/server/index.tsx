@@ -1,9 +1,15 @@
 import { Hono } from "npm:hono";
 import { cors } from "npm:hono/cors";
 import { logger } from "npm:hono/logger";
+import { createClient } from "npm:@supabase/supabase-js";
 import * as kv from "./kv_store.tsx";
 
 const app = new Hono();
+const ADMIN_EMAILS = ["kingof21kings@gmail.com"];
+const supabaseAdmin = createClient(
+  Deno.env.get("SUPABASE_URL") || "",
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+);
 app.use("*", logger(console.log));
 app.use("/*", cors({
   origin: "*",
@@ -15,6 +21,24 @@ app.use("/*", cors({
 
 app.get("/make-server-4cb0fb87/health", (c) => c.json({ status: "ok" }));
 
+async function getAuthedUser(c: any) {
+  const auth = c.req.header("Authorization") || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!token) return null;
+  const { data, error } = await supabaseAdmin.auth.getUser(token);
+  if (error || !data.user) return null;
+  return data.user;
+}
+async function requireUser(c: any, userId?: string) {
+  const user = await getAuthedUser(c);
+  if (!user) return { error: c.json({ error: "Sign in required" }, 401) };
+  if (userId && user.id !== userId) return { error: c.json({ error: "Not allowed" }, 403) };
+  return { user };
+}
+function isAdminEmail(email?: string | null) {
+  return !!email && ADMIN_EMAILS.includes(email.toLowerCase());
+}
+
 function ytId(url: string): string | null {
   const m = url?.match(/(?:youtu\.be\/|v=|\/embed\/)([A-Za-z0-9_-]{11})/);
   return m ? m[1] : null;
@@ -22,7 +46,10 @@ function ytId(url: string): string | null {
 
 function miniProfile(p: any) {
   if (!p) return { userId: "", firstName: "Player", lastName: "", position: "", avatarUrl: "", role: "player", accountType: "player", teamName: "" };
-  return { userId: p.userId, firstName: p.firstName, lastName: p.lastName, position: p.position, avatarUrl: p.avatarUrl || "", role: p.role || "player", accountType: p.accountType || "player", teamName: p.teamName || "" };
+  return { userId: p.userId, firstName: p.firstName, lastName: p.lastName, position: p.position, avatarUrl: p.avatarUrl || "", role: isAdminEmail(p.email) ? "admin" : "player", accountType: p.accountType || "player", teamName: p.teamName || "" };
+}
+function safeProfile(p: any) {
+  return p ? { ...p, role: isAdminEmail(p.email) ? "admin" : "player" } : null;
 }
 function cleanText(value: unknown, max = 80) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
@@ -60,12 +87,14 @@ app.post("/make-server-4cb0fb87/profile", async (c) => {
   const body = await c.req.json();
   const { userId, ...profile } = body;
   if (!userId) return c.json({ error: "userId required" }, 400);
+  const auth = await requireUser(c, userId);
+  if (auth.error) return auth.error;
   const safeProfile = {
     ...profile,
     firstName: cleanText(profile.firstName),
     lastName: cleanText(profile.lastName),
     avatarUrl: cleanImageUrl(profile.avatarUrl),
-    role: profile.role === "admin" ? "admin" : "player",
+    role: isAdminEmail(auth.user.email) ? "admin" : "player",
   };
   if (!safeProfile.firstName || !safeProfile.lastName) return c.json({ error: "name required" }, 400);
   await kv.set(`profile_${userId}`, { userId, ...safeProfile, updatedAt: new Date().toISOString() });
@@ -77,7 +106,7 @@ app.post("/make-server-4cb0fb87/profile", async (c) => {
 app.get("/make-server-4cb0fb87/profile/:userId", async (c) => {
   const userId = c.req.param("userId");
   const profile = await kv.get(`profile_${userId}`);
-  return c.json({ profile: profile || null });
+  return c.json({ profile: safeProfile(profile) });
 });
 
 // ── User search ───────────────────────────────────────────────────────────────
@@ -96,6 +125,8 @@ app.get("/make-server-4cb0fb87/users/search", async (c) => {
 app.post("/make-server-4cb0fb87/gamedata", async (c) => {
   const { userId, data } = await c.req.json();
   if (!userId) return c.json({ error: "userId required" }, 400);
+  const auth = await requireUser(c, userId);
+  if (auth.error) return auth.error;
   await kv.set(`gamedata_${userId}`, data);
   return c.json({ ok: true });
 });
@@ -135,6 +166,8 @@ app.get("/make-server-4cb0fb87/community", async (c) => {
 app.post("/make-server-4cb0fb87/follow", async (c) => {
   const { followerId, followeeId, followerName } = await c.req.json();
   if (!followerId || !followeeId || followerId === followeeId) return c.json({ error: "Invalid" }, 400);
+  const auth = await requireUser(c, followerId);
+  if (auth.error) return auth.error;
   const following: string[] = (await kv.get(`following_${followerId}`)) || [];
   if (!following.includes(followeeId)) {
     await kv.set(`following_${followerId}`, [...following, followeeId]);
@@ -148,6 +181,8 @@ app.post("/make-server-4cb0fb87/follow", async (c) => {
 app.post("/make-server-4cb0fb87/unfollow", async (c) => {
   const { followerId, followeeId } = await c.req.json();
   if (!followerId || !followeeId) return c.json({ error: "Invalid" }, 400);
+  const auth = await requireUser(c, followerId);
+  if (auth.error) return auth.error;
   const following: string[] = (await kv.get(`following_${followerId}`)) || [];
   await kv.set(`following_${followerId}`, following.filter((id: string) => id !== followeeId));
   const followers: string[] = (await kv.get(`followers_${followeeId}`)) || [];
@@ -171,6 +206,8 @@ app.get("/make-server-4cb0fb87/notifications/:userId", async (c) => {
 
 app.post("/make-server-4cb0fb87/notifications/:userId/read", async (c) => {
   const userId = c.req.param("userId");
+  const auth = await requireUser(c, userId);
+  if (auth.error) return auth.error;
   const notifs: any[] = (await kv.get(`notifs_${userId}`)) || [];
   await kv.set(`notifs_${userId}`, notifs.map(n => ({ ...n, read: true })));
   return c.json({ ok: true });
@@ -180,6 +217,8 @@ app.post("/make-server-4cb0fb87/notifications/:userId/read", async (c) => {
 app.post("/make-server-4cb0fb87/posts", async (c) => {
   const { userId, content, videoUrl, replyTo, quotedPostId, taggedUserIds, coAuthors } = await c.req.json();
   if (!userId || (!content?.trim() && !videoUrl)) return c.json({ error: "Content required" }, 400);
+  const auth = await requireUser(c, userId);
+  if (auth.error) return auth.error;
 
   const id = crypto.randomUUID();
   const post = {
@@ -264,6 +303,8 @@ app.get("/make-server-4cb0fb87/posts/:postId/replies", async (c) => {
 app.post("/make-server-4cb0fb87/posts/:postId/like", async (c) => {
   const postId = c.req.param("postId");
   const { userId, userName } = await c.req.json();
+  const auth = await requireUser(c, userId);
+  if (auth.error) return auth.error;
   const post = await kv.get(`post_${postId}`);
   if (!post) return c.json({ error: "Not found" }, 404);
   const liked = (post.likes || []).includes(userId);
@@ -279,6 +320,8 @@ app.post("/make-server-4cb0fb87/posts/:postId/like", async (c) => {
 app.post("/make-server-4cb0fb87/posts/:postId/repost", async (c) => {
   const postId = c.req.param("postId");
   const { userId, userName } = await c.req.json();
+  const auth = await requireUser(c, userId);
+  if (auth.error) return auth.error;
   const post = await kv.get(`post_${postId}`);
   if (!post) return c.json({ error: "Not found" }, 404);
   const reposted = (post.reposts || []).includes(userId);
@@ -293,6 +336,11 @@ app.post("/make-server-4cb0fb87/posts/:postId/repost", async (c) => {
 
 app.delete("/make-server-4cb0fb87/posts/:postId", async (c) => {
   const postId = c.req.param("postId");
+  const auth = await requireUser(c);
+  if (auth.error) return auth.error;
+  const post = await kv.get(`post_${postId}`);
+  if (!post) return c.json({ error: "Not found" }, 404);
+  if (post.userId !== auth.user.id && !isAdminEmail(auth.user.email)) return c.json({ error: "Admin required" }, 403);
   await kv.del(`post_${postId}`);
   return c.json({ ok: true });
 });
@@ -301,6 +349,8 @@ app.delete("/make-server-4cb0fb87/posts/:postId", async (c) => {
 app.post("/make-server-4cb0fb87/teams", async (c) => {
   const { userId, name, level, description, location } = await c.req.json();
   if (!userId || !name?.trim()) return c.json({ error: "Missing fields" }, 400);
+  const auth = await requireUser(c, userId);
+  if (auth.error) return auth.error;
   const id = crypto.randomUUID();
   const team = { id, name: name.trim(), level: level || "Men's League", description: description?.trim() || "", location: location?.trim() || "", createdBy: userId, members: [userId], createdAt: new Date().toISOString() };
   await kv.set(`team_${id}`, team);
@@ -319,6 +369,8 @@ app.get("/make-server-4cb0fb87/teams", async (c) => {
 app.post("/make-server-4cb0fb87/teams/:id/join", async (c) => {
   const id = c.req.param("id");
   const { userId } = await c.req.json();
+  const auth = await requireUser(c, userId);
+  if (auth.error) return auth.error;
   const team = await kv.get(`team_${id}`);
   if (!team) return c.json({ error: "Not found" }, 404);
   if (!team.members.includes(userId)) team.members = [...team.members, userId];
@@ -329,6 +381,8 @@ app.post("/make-server-4cb0fb87/teams/:id/join", async (c) => {
 app.post("/make-server-4cb0fb87/teams/:id/leave", async (c) => {
   const id = c.req.param("id");
   const { userId } = await c.req.json();
+  const auth = await requireUser(c, userId);
+  if (auth.error) return auth.error;
   const team = await kv.get(`team_${id}`);
   if (!team) return c.json({ error: "Not found" }, 404);
   team.members = team.members.filter((m: string) => m !== userId);
@@ -338,6 +392,11 @@ app.post("/make-server-4cb0fb87/teams/:id/leave", async (c) => {
 
 app.delete("/make-server-4cb0fb87/teams/:id", async (c) => {
   const id = c.req.param("id");
+  const auth = await requireUser(c);
+  if (auth.error) return auth.error;
+  const team = await kv.get(`team_${id}`);
+  if (!team) return c.json({ error: "Not found" }, 404);
+  if (team.createdBy !== auth.user.id && !isAdminEmail(auth.user.email)) return c.json({ error: "Admin required" }, 403);
   await kv.del(`team_${id}`);
   return c.json({ ok: true });
 });
