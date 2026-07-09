@@ -109,6 +109,8 @@ function shootingPct(shots: ShotEntry[]) {
   return a === 0 ? 0 : Math.round((m / a) * 100);
 }
 function extractYTId(url: string) { const m = url.match(/(?:youtu\.be\/|v=|\/embed\/)([A-Za-z0-9_-]{11})/); return m ? m[1] : null; }
+function isDirectVideoUrl(url?: string) { return !!url && /^https:\/\/.+\.(mp4|webm|mov)(\?.*)?$/i.test(url); }
+function verticalFromFlightTime(seconds: number) { return Math.max(0, Math.round(48.26 * seconds * seconds * 10) / 10); }
 function timeAgo(iso: string) {
   const diff = Date.now() - new Date(iso).getTime(), m = Math.floor(diff / 60000);
   if (m < 1) return "just now"; if (m < 60) return `${m}m`;
@@ -215,7 +217,8 @@ const QuotedPost = ({ post }: { post: PostData }) => (
       {post.profile?.position && <span className="text-xs text-primary bg-primary/10 px-1.5 py-0.5 rounded-md">{post.profile.position}</span>}
     </div>
     {post.content && <p className="text-sm text-muted-foreground line-clamp-3">{post.content}</p>}
-    {post.videoId && <div className="aspect-video rounded-lg overflow-hidden bg-zinc-900"><iframe src={`https://www.youtube.com/embed/${post.videoId}`} title="v" allowFullScreen className="w-full h-full" /></div>}
+    {post.videoId ? <div className="aspect-video rounded-lg overflow-hidden bg-zinc-900"><iframe src={`https://www.youtube.com/embed/${post.videoId}`} title="v" allowFullScreen className="w-full h-full" /></div>
+      : isDirectVideoUrl(post.videoUrl) && <div className="aspect-video rounded-lg overflow-hidden bg-zinc-900"><video src={post.videoUrl} controls className="w-full h-full object-contain" /></div>}
   </div>
 );
 
@@ -235,12 +238,12 @@ function PostCard({ post, currentUserId, currentUserName, canModerate = false, o
   async function handleLike() {
     if (!currentUserId) return;
     const res = await apiPost(`/posts/${post.id}/like`, { userId: currentUserId, userName: currentUserName });
-    if (res) onUpdate({ ...post, likes: res.liked ? [...post.likes, currentUserId] : post.likes.filter(id => id !== currentUserId), likeCount: res.likeCount });
+    if (typeof res?.liked === "boolean") onUpdate({ ...post, likes: res.liked ? [...post.likes, currentUserId] : post.likes.filter(id => id !== currentUserId), likeCount: res.likeCount });
   }
   async function handleRepost() {
     if (!currentUserId) return;
     const res = await apiPost(`/posts/${post.id}/repost`, { userId: currentUserId, userName: currentUserName });
-    if (res) onUpdate({ ...post, reposts: res.reposted ? [...post.reposts, currentUserId] : post.reposts.filter(id => id !== currentUserId), repostCount: res.repostCount });
+    if (typeof res?.reposted === "boolean") onUpdate({ ...post, reposts: res.reposted ? [...post.reposts, currentUserId] : post.reposts.filter(id => id !== currentUserId), repostCount: res.repostCount });
   }
   async function handleShowReplies() {
     if (showReplies) { setShowReplies(false); return; }
@@ -267,7 +270,8 @@ function PostCard({ post, currentUserId, currentUserName, canModerate = false, o
         )}
       </div>
       {post.content && <p className="text-sm leading-relaxed whitespace-pre-wrap">{post.content}</p>}
-      {post.videoId && <div className="aspect-video rounded-xl overflow-hidden bg-zinc-900"><iframe src={`https://www.youtube.com/embed/${post.videoId}`} title="clip" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen className="w-full h-full" /></div>}
+      {post.videoId ? <div className="aspect-video rounded-xl overflow-hidden bg-zinc-900"><iframe src={`https://www.youtube.com/embed/${post.videoId}`} title="clip" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen className="w-full h-full" /></div>
+        : isDirectVideoUrl(post.videoUrl) && <div className="aspect-video rounded-xl overflow-hidden bg-zinc-900"><video src={post.videoUrl} controls className="w-full h-full object-contain" /></div>}
       {post.quotedPost && <QuotedPost post={post.quotedPost} />}
       <div className="flex items-center gap-1 pt-1 border-t border-border">
         <button onClick={handleLike} disabled={!currentUserId} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${liked ? "text-red-400 bg-red-400/10" : "text-muted-foreground hover:text-red-400 hover:bg-red-400/10"} disabled:cursor-not-allowed`}>
@@ -305,18 +309,20 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
   onPost: (p: PostData) => void; onCancel?: () => void;
 }) {
   const [content, setContent] = useState(""), [videoUrl, setVideoUrl] = useState(""), [showVideo, setShowVideo] = useState(false), [posting, setPosting] = useState(false);
+  const [localVideoName, setLocalVideoName] = useState("");
   const videoId = extractYTId(videoUrl);
-  const canPost = content.trim().length > 0 || !!videoId;
+  const videoOk = !!videoId || isDirectVideoUrl(videoUrl);
+  const canPost = content.trim().length > 0 || videoOk;
 
   async function submit() {
     if (!canPost || posting) return;
     setPosting(true);
-    const res = await apiPost("/posts", { userId: profile.userId, content: content.trim(), videoUrl: videoId ? videoUrl : null, replyTo: replyTo?.id ?? null, quotedPostId: quotedPost?.id ?? null });
+    const res = await apiPost("/posts", { userId: profile.userId, content: content.trim(), videoUrl: videoOk ? videoUrl : null, replyTo: replyTo?.id ?? null, quotedPostId: quotedPost?.id ?? null });
     if (res?.post) {
       res.post.profile = { firstName: profile.firstName, lastName: profile.lastName, position: profile.position, avatarUrl: profile.avatarUrl, role: profile.role };
       onPost(res.post);
     }
-    setContent(""); setVideoUrl(""); setShowVideo(false); setPosting(false);
+    setContent(""); setVideoUrl(""); setLocalVideoName(""); setShowVideo(false); setPosting(false);
   }
 
   return (
@@ -333,10 +339,16 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, qu
       </div>
       {showVideo && (
         <div className="space-y-2">
-          <input value={videoUrl} onChange={e => setVideoUrl(e.target.value)} placeholder="Paste YouTube URL…"
+          <input value={videoUrl} onChange={e => setVideoUrl(e.target.value)} placeholder="Paste YouTube or direct HTTPS video link"
             className="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary" />
-          {videoId && <div className="aspect-video rounded-xl overflow-hidden bg-zinc-900"><iframe src={`https://www.youtube.com/embed/${videoId}`} title="preview" allowFullScreen className="w-full h-full" /></div>}
-          {videoUrl && !videoId && <p className="text-xs text-destructive">Couldn&apos;t find a YouTube video ID in that link.</p>}
+          <label className="flex items-center justify-center gap-2 border border-dashed border-border rounded-xl px-3 py-3 text-xs text-muted-foreground hover:text-primary hover:border-primary cursor-pointer">
+            <Video size={14} /> Choose from camera roll
+            <input type="file" accept="video/*" capture="environment" className="hidden" onChange={e => setLocalVideoName(e.target.files?.[0]?.name || "")} />
+          </label>
+          {localVideoName && <p className="text-xs text-muted-foreground">Selected: {localVideoName}. To share it with everyone, upload it first and paste the video link above.</p>}
+          {videoId ? <div className="aspect-video rounded-xl overflow-hidden bg-zinc-900"><iframe src={`https://www.youtube.com/embed/${videoId}`} title="preview" allowFullScreen className="w-full h-full" /></div>
+            : isDirectVideoUrl(videoUrl) && <div className="aspect-video rounded-xl overflow-hidden bg-zinc-900"><video src={videoUrl} controls className="w-full h-full object-contain" /></div>}
+          {videoUrl && !videoOk && <p className="text-xs text-destructive">Use a YouTube link or a direct HTTPS video link ending in .mp4, .webm, or .mov.</p>}
         </div>
       )}
       {quotedPost && <QuotedPost post={quotedPost} />}
@@ -761,8 +773,8 @@ function PlayerProfileView({ player, onBack, currentUserId, currentUserName }: {
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
               <XAxis dataKey="date" tick={{ fill: "#8a8680", fontSize: 11 }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fill: "#8a8680", fontSize: 11 }} axisLine={false} tickLine={false} unit=" m" />
-              <Tooltip content={<ChartTip unit=" min" />} cursor={{ fill: "rgba(20,184,166,0.07)" }} />
-              <Bar name="pub-min" dataKey="minutes" fill="#14b8a6" radius={[6, 6, 0, 0]} />
+              <Tooltip content={<ChartTip unit=" min" />} cursor={{ fill: "rgba(34,197,94,0.07)" }} />
+              <Bar name="pub-min" dataKey="minutes" fill="#22c55e" radius={[6, 6, 0, 0]} />
             </BarChart></ResponsiveContainer></div>
           </div>
         )}
@@ -773,9 +785,9 @@ function PlayerProfileView({ player, onBack, currentUserId, currentUserName }: {
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
               <XAxis dataKey="session" tick={{ fill: "#8a8680", fontSize: 11 }} axisLine={false} tickLine={false} />
               <YAxis domain={[0, 100]} tick={{ fill: "#8a8680", fontSize: 11 }} axisLine={false} tickLine={false} unit="%" />
-              <ReferenceLine y={pct} stroke="rgba(20,184,166,0.3)" strokeDasharray="4 4" />
-              <Tooltip content={<ChartTip unit="%" />} cursor={{ stroke: "rgba(20,184,166,0.2)", strokeWidth: 1 }} />
-              <Line name="pub-pct" type="monotone" dataKey="pct" stroke="#14b8a6" strokeWidth={2.5} dot={{ fill: "#14b8a6", r: 4, strokeWidth: 0 }} activeDot={{ r: 6, fill: "#14b8a6" }} />
+              <ReferenceLine y={pct} stroke="rgba(34,197,94,0.3)" strokeDasharray="4 4" />
+              <Tooltip content={<ChartTip unit="%" />} cursor={{ stroke: "rgba(34,197,94,0.2)", strokeWidth: 1 }} />
+              <Line name="pub-pct" type="monotone" dataKey="pct" stroke="#22c55e" strokeWidth={2.5} dot={{ fill: "#22c55e", r: 4, strokeWidth: 0 }} activeDot={{ r: 6, fill: "#22c55e" }} />
             </LineChart></ResponsiveContainer></div>
           </div>
         )}
@@ -964,6 +976,59 @@ function ViewHero({ img, title, sub }: { img: string; title: string; sub: string
   );
 }
 
+function FlightTimeTool() {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [videoUrl, setVideoUrl] = useState("");
+  const [takeoff, setTakeoff] = useState<number | null>(null);
+  const [landing, setLanding] = useState<number | null>(null);
+  const flight = takeoff !== null && landing !== null && landing > takeoff ? landing - takeoff : 0;
+  const vertical = flight ? verticalFromFlightTime(flight) : 0;
+
+  function loadVideo(file?: File) {
+    if (!file) return;
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    setVideoUrl(URL.createObjectURL(file));
+    setTakeoff(null);
+    setLanding(null);
+  }
+  function markTakeoff() { if (videoRef.current) setTakeoff(videoRef.current.currentTime); }
+  function markLanding() { if (videoRef.current) setLanding(videoRef.current.currentTime); }
+
+  return (
+    <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 mb-1"><Activity size={14} className="text-primary" /><span className="text-xs uppercase tracking-wider text-muted-foreground">Vertical Jump Flight Time</span></div>
+          <p className="text-xs text-muted-foreground">Record or choose a jump video, pause on takeoff and landing, and the app converts flight time to vertical.</p>
+        </div>
+        <label className="bg-primary text-primary-foreground rounded-xl px-3 py-2 text-xs font-semibold cursor-pointer whitespace-nowrap">
+          Use Camera
+          <input type="file" accept="video/*" capture="environment" className="hidden" onChange={e => loadVideo(e.target.files?.[0])} />
+        </label>
+      </div>
+
+      {videoUrl ? (
+        <div className="space-y-3">
+          <video ref={videoRef} src={videoUrl} controls playsInline className="w-full max-h-80 rounded-xl bg-black object-contain" />
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={markTakeoff} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Takeoff</button>
+            <button onClick={markLanding} className="bg-secondary text-secondary-foreground rounded-xl py-2 text-sm font-semibold hover:bg-muted">Mark Landing</button>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">Takeoff</p><p className="text-lg font-black text-primary">{takeoff === null ? "--" : `${takeoff.toFixed(2)}s`}</p></div>
+            <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">Flight</p><p className="text-lg font-black text-primary">{flight ? `${flight.toFixed(2)}s` : "--"}</p></div>
+            <div className="bg-background border border-border rounded-xl p-3"><p className="text-xs text-muted-foreground">Vertical</p><p className="text-lg font-black text-primary">{vertical ? `${vertical}"` : "--"}</p></div>
+          </div>
+        </div>
+      ) : (
+        <div className="border border-dashed border-border rounded-xl p-6 text-center text-sm text-muted-foreground">
+          On phone, tap Use Camera to record from your camera or pick from camera roll. On desktop, choose a jump video file.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TrainingView({ data }: { data: AppData }) {
   const weeklyData = Array.from({ length: 8 }, (_, wi) => {
     const wS = 7 * (7 - wi), wE = wS - 7;
@@ -978,18 +1043,19 @@ function TrainingView({ data }: { data: AppData }) {
     return { month: lbl, pct: att > 0 ? Math.round((made / att) * 100) : null };
   });
   const avgPct = shootingPct(data.shots);
-  const heatBg = ["#1e1e20","rgba(20,184,166,0.2)","rgba(20,184,166,0.4)","rgba(20,184,166,0.7)","#14b8a6"];
+  const heatBg = ["#1e1e20","rgba(34,197,94,0.2)","rgba(34,197,94,0.4)","rgba(34,197,94,0.7)","#22c55e"];
   return (
     <div className="space-y-6">
-      <ViewHero img="1606048033063-fe28cdad4f35" title="Training" sub="Long-term progress" />
+      <ViewHero img="1519861531473-9200262188bf" title="Training" sub="Long-term progress" />
+      <FlightTimeTool />
       <div className="bg-card border border-border rounded-2xl p-6">
         <div className="flex items-center gap-2 mb-5"><Clock size={14} className="text-primary" /><span className="text-xs uppercase tracking-wider text-muted-foreground">Weekly Volume (last 8 weeks)</span></div>
         <div className="h-52"><ResponsiveContainer width="100%" height="100%"><BarChart id="t-weekly" data={weeklyData} barSize={28} margin={{ top:4,right:4,bottom:0,left:-20 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
           <XAxis dataKey="week" tick={{ fill:"#8a8680",fontSize:11 }} axisLine={false} tickLine={false} />
           <YAxis tick={{ fill:"#8a8680",fontSize:11 }} axisLine={false} tickLine={false} unit=" m" />
-          <Tooltip content={<ChartTip unit=" min" />} cursor={{ fill:"rgba(20,184,166,0.07)" }} />
-          <Bar name="weekly-min" dataKey="minutes" fill="#14b8a6" radius={[6,6,0,0]} />
+          <Tooltip content={<ChartTip unit=" min" />} cursor={{ fill:"rgba(34,197,94,0.07)" }} />
+          <Bar name="weekly-min" dataKey="minutes" fill="#22c55e" radius={[6,6,0,0]} />
         </BarChart></ResponsiveContainer></div>
       </div>
       <div className="bg-card border border-border rounded-2xl p-6">
@@ -998,9 +1064,9 @@ function TrainingView({ data }: { data: AppData }) {
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
           <XAxis dataKey="month" tick={{ fill:"#8a8680",fontSize:11 }} axisLine={false} tickLine={false} />
           <YAxis domain={[0,100]} tick={{ fill:"#8a8680",fontSize:11 }} axisLine={false} tickLine={false} unit="%" />
-          <ReferenceLine y={avgPct} stroke="rgba(20,184,166,0.3)" strokeDasharray="4 4" />
-          <Tooltip content={<ChartTip unit="%" />} cursor={{ stroke:"rgba(20,184,166,0.2)",strokeWidth:1 }} />
-          <Line name="monthly-pct" type="monotone" dataKey="pct" stroke="#14b8a6" strokeWidth={2.5} connectNulls dot={{ fill:"#14b8a6",r:4,strokeWidth:0 }} activeDot={{ r:6,fill:"#14b8a6" }} />
+          <ReferenceLine y={avgPct} stroke="rgba(34,197,94,0.3)" strokeDasharray="4 4" />
+          <Tooltip content={<ChartTip unit="%" />} cursor={{ stroke:"rgba(34,197,94,0.2)",strokeWidth:1 }} />
+          <Line name="monthly-pct" type="monotone" dataKey="pct" stroke="#22c55e" strokeWidth={2.5} connectNulls dot={{ fill:"#22c55e",r:4,strokeWidth:0 }} activeDot={{ r:6,fill:"#22c55e" }} />
         </LineChart></ResponsiveContainer></div>
         <p className="text-xs text-muted-foreground mt-3">Dashed = all-time avg ({avgPct}%)</p>
       </div>
@@ -1024,14 +1090,14 @@ function StrengthView({ data, onUpdate }: { data: AppData; onUpdate: (d: AppData
   const last = ex.history.length?ex.history[ex.history.length-1].weight:null;
   return (
     <div className="space-y-6">
-      <ViewHero img="1534438327776-3db31fd82e9a" title="Strength" sub="Track your lifts" />
+      <ViewHero img="1581009146145-b5ef050c2e1e" title="Strength" sub="Track your lifts" />
       <div className="flex flex-wrap gap-2">
         {data.strength.map((e,i)=><button key={i} onClick={()=>{setSel(i);setAdding(false);}} className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${i===sel?"bg-primary text-primary-foreground":"bg-secondary text-secondary-foreground hover:bg-muted"}`}>{e.name}</button>)}
         {addEx?(<div className="flex items-center gap-2"><input autoFocus value={exName} onChange={e=>setExName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveEx()} placeholder="Exercise name" className="bg-secondary border border-border rounded-xl px-3 py-2 text-sm outline-none w-36" /><button onClick={saveEx} className="bg-primary text-primary-foreground rounded-xl p-2"><Check size={14}/></button><button onClick={()=>{setAddEx(false);setExName("");}} className="bg-secondary rounded-xl p-2"><X size={14}/></button></div>)
         :<button onClick={()=>setAddEx(true)} className="px-4 py-2 rounded-xl text-sm bg-secondary text-muted-foreground hover:text-foreground flex items-center gap-1.5"><Plus size={13}/> Add lift</button>}
       </div>
       <div className="grid grid-cols-3 gap-4">{[{l:"Best",v:best?`${best} ${ex.unit}`:"—"},{l:"Last",v:last!==null?`${last} ${ex.unit}`:"—"},{l:"Sessions",v:String(ex.history.length)}].map(s=>(<div key={s.l} className="bg-card border border-border rounded-2xl p-4"><p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">{s.l}</p><p className="text-2xl font-black text-primary" style={{fontFamily:"'Roboto Slab',serif"}}>{s.v}</p></div>))}</div>
-      {graphData.length>=2?(<div className="bg-card border border-border rounded-2xl p-6"><div className="flex items-center gap-2 mb-5"><TrendingUp size={14} className="text-primary"/><span className="text-xs uppercase tracking-wider text-muted-foreground">{ex.name} — Weight Over Time</span></div><div className="h-48"><ResponsiveContainer width="100%" height="100%"><LineChart id="s-strength" data={graphData} margin={{top:4,right:4,bottom:0,left:-10}}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false}/><XAxis dataKey="date" tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false}/><YAxis tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false} unit={` ${ex.unit}`}/><Tooltip content={<ChartTip unit={` ${ex.unit}`}/>} cursor={{stroke:"rgba(20,184,166,0.2)",strokeWidth:1}}/><Line name="strength-weight" type="monotone" dataKey="weight" stroke="#14b8a6" strokeWidth={2.5} dot={{fill:"#14b8a6",r:4,strokeWidth:0}} activeDot={{r:6,fill:"#14b8a6"}}/></LineChart></ResponsiveContainer></div></div>)
+      {graphData.length>=2?(<div className="bg-card border border-border rounded-2xl p-6"><div className="flex items-center gap-2 mb-5"><TrendingUp size={14} className="text-primary"/><span className="text-xs uppercase tracking-wider text-muted-foreground">{ex.name} — Weight Over Time</span></div><div className="h-48"><ResponsiveContainer width="100%" height="100%"><LineChart id="s-strength" data={graphData} margin={{top:4,right:4,bottom:0,left:-10}}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false}/><XAxis dataKey="date" tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false}/><YAxis tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false} unit={` ${ex.unit}`}/><Tooltip content={<ChartTip unit={` ${ex.unit}`}/>} cursor={{stroke:"rgba(34,197,94,0.2)",strokeWidth:1}}/><Line name="strength-weight" type="monotone" dataKey="weight" stroke="#22c55e" strokeWidth={2.5} dot={{fill:"#22c55e",r:4,strokeWidth:0}} activeDot={{r:6,fill:"#22c55e"}}/></LineChart></ResponsiveContainer></div></div>)
       :<div className="bg-card border border-border rounded-2xl p-8 text-center text-muted-foreground text-sm">Log at least 2 sessions to see your chart.</div>}
       <div className="bg-card border border-border rounded-2xl p-6">
         <div className="flex items-center justify-between mb-4"><span className="text-xs uppercase tracking-wider text-muted-foreground">History</span>{!adding&&<button onClick={()=>setAdding(true)} className="flex items-center gap-1.5 bg-primary text-primary-foreground text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-accent"><Plus size={12}/> Log today</button>}</div>
@@ -1348,8 +1414,8 @@ export default function App() {
   const rank = getRank(totalMinutes);
   const nextRank = getNextRank(totalMinutes);
   const navCards = [
-    { key:"strength" as View, label:"Strength", sub:"Track your lifts", img:"1534438327776-3db31fd82e9a", Icon:Dumbbell },
-    { key:"training" as View, label:"Training", sub:"Long-term graphs", img:"1606048033063-fe28cdad4f35", Icon:TrendingUp },
+    { key:"strength" as View, label:"Strength", sub:"Track your lifts", img:"1581009146145-b5ef050c2e1e", Icon:Dumbbell },
+    { key:"training" as View, label:"Training", sub:"Long-term graphs", img:"1519861531473-9200262188bf", Icon:TrendingUp },
     { key:"community" as View, label:"Community", sub:"Feed & players", img:"1546519638-68e109498ffc", Icon:Users },
   ];
 
@@ -1475,8 +1541,8 @@ export default function App() {
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false}/>
               <XAxis dataKey="date" tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false}/>
               <YAxis tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false} unit=" m"/>
-              <Tooltip content={<ChartTip unit=" min"/>} cursor={{fill:"rgba(20,184,166,0.07)"}}/>
-              <Bar name="home-minutes" dataKey="minutes" fill="#14b8a6" radius={[6,6,0,0]}/>
+              <Tooltip content={<ChartTip unit=" min"/>} cursor={{fill:"rgba(34,197,94,0.07)"}}/>
+              <Bar name="home-minutes" dataKey="minutes" fill="#22c55e" radius={[6,6,0,0]}/>
             </BarChart></ResponsiveContainer></div>
           </div>
 
@@ -1486,8 +1552,8 @@ export default function App() {
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false}/>
               <XAxis dataKey="date" tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false}/>
               <YAxis tick={{fill:"#8a8680",fontSize:11}} axisLine={false} tickLine={false}/>
-              <Tooltip content={<ChartTip/>} cursor={{fill:"rgba(20,184,166,0.07)"}}/>
-              <Bar name="Made" dataKey="made" fill="#14b8a6" radius={[6,6,0,0]}/>
+              <Tooltip content={<ChartTip/>} cursor={{fill:"rgba(34,197,94,0.07)"}}/>
+              <Bar name="Made" dataKey="made" fill="#22c55e" radius={[6,6,0,0]}/>
               <Bar name="Attempted" dataKey="attempted" fill="#065f46" radius={[6,6,0,0]}/>
             </BarChart></ResponsiveContainer></div>
             <p className="text-xs text-muted-foreground mt-3">All-time shooting average: {pct}%</p>
