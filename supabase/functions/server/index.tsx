@@ -5,7 +5,7 @@ import { createClient } from "npm:@supabase/supabase-js";
 import * as kv from "./kv_store.tsx";
 
 const app = new Hono();
-const ADMIN_EMAILS = ["kingof21kings@gmail.com"];
+const ADMIN_EMAILS = const ADMIN_EMAILS = ["rowanck00@gmail.com","kingof21kings@gmail.com"];
 const supabaseAdmin = createClient(
   Deno.env.get("SUPABASE_URL") || "",
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
