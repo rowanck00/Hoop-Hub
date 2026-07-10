@@ -1,0 +1,11 @@
+{
+  "name": "Hoop Hub",
+  "short_name": "Hoop Hub",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#050705",
+  "theme_color": "#050705",
+  "description": "Track basketball training, shooting, strength, and community progress."
+}

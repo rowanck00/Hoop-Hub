@@ -11,8 +11,15 @@ const supabaseAdmin = createClient(
   Deno.env.get("SUPABASE_URL") || "",
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
 );
-const VAPID_PUBLIC_KEY = Deno.env.get("VAPID_PUBLIC_KEY") || "";
-const VAPID_PRIVATE_KEY = Deno.env.get("VAPID_PRIVATE_KEY") || "";
+function firstSecret(...names: string[]) {
+  for (const name of names) {
+    const value = Deno.env.get(name);
+    if (value) return value.trim();
+  }
+  return "";
+}
+const VAPID_PUBLIC_KEY = firstSecret("VAPID_PUBLIC_KEY", "VAP_ID_PUBLIC_KEY", "VAPID_PUBLIC", "PUBLIC_VAPID_KEY");
+const VAPID_PRIVATE_KEY = firstSecret("VAPID_PRIVATE_KEY", "VAP_ID_PRIVATE_KEY", "VAPID_PRIVATE", "PRIVATE_VAPID_KEY");
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   webpush.setVapidDetails(
     Deno.env.get("VAPID_SUBJECT") || "mailto:rowanck00@gmail.com",
@@ -241,7 +248,15 @@ app.get("/make-server-4cb0fb87/social/:userId", async (c) => {
 
 // ── Notifications ─────────────────────────────────────────────────────────────
 app.get("/make-server-4cb0fb87/push/public-key", (c) => {
-  return c.json({ publicKey: VAPID_PUBLIC_KEY, enabled: !!(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) });
+  const hasPublicKey = !!VAPID_PUBLIC_KEY;
+  const hasPrivateKey = !!VAPID_PRIVATE_KEY;
+  return c.json({
+    publicKey: VAPID_PUBLIC_KEY,
+    enabled: hasPublicKey && hasPrivateKey,
+    hasPublicKey,
+    hasPrivateKey,
+    message: hasPublicKey && hasPrivateKey ? "Push keys are configured." : "Push keys are missing from Supabase secrets.",
+  });
 });
 
 app.post("/make-server-4cb0fb87/push/subscribe", async (c) => {

@@ -298,8 +298,14 @@ async function enablePushNotifications(userId: string) {
   }
   const permission = await Notification.requestPermission();
   if (permission !== "granted") return { ok: false, error: "Notifications are blocked for this site." };
-  const keyRes = await apiFetch<{ publicKey?: string }>("/push/public-key", {});
-  if (!keyRes.publicKey) return { ok: false, error: "Push keys are not set up on the server yet." };
+  const keyRes = await apiFetch<{ publicKey?: string; hasPublicKey?: boolean; hasPrivateKey?: boolean; message?: string }>("/push/public-key", {});
+  if (!keyRes.publicKey) {
+    const missing = [
+      keyRes.hasPublicKey === false ? "public key" : "",
+      keyRes.hasPrivateKey === false ? "private key" : "",
+    ].filter(Boolean).join(" and ");
+    return { ok: false, error: missing ? `Missing ${missing} in Supabase secrets.` : "Push keys are not set up on the server yet." };
+  }
   const registration = await navigator.serviceWorker.register("/sw.js");
   const existing = await registration.pushManager.getSubscription();
   const subscription = existing || await registration.pushManager.subscribe({
