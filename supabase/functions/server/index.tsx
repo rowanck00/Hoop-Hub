@@ -115,7 +115,7 @@ async function sendPush(toUserId: string, notif: any) {
   const subs: any[] = (await kv.get(key)) || [];
   if (!subs.length) return;
   const payload = JSON.stringify({
-    title: "Hoop Hub",
+    title: "B-Ball Tracker",
     body: notif.message || "You have a new notification.",
     url: "/?view=community",
   });

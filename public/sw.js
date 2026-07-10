@@ -5,7 +5,7 @@ self.addEventListener("push", event => {
   } catch {
     data = {};
   }
-  const title = data.title || "Hoop Hub";
+  const title = data.title || "B-Ball Tracker";
   const options = {
     body: data.body || "You have a new notification.",
     icon: "/favicon.ico",

@@ -75,8 +75,8 @@ interface AppData {
 const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
 const TEAM_LEVELS = ["Men's League", "High School", "College", "Pro / Overseas", "Club / Recreational"];
 const SERVER = `https://${projectId}.supabase.co/functions/v1/make-server-4cb0fb87`;
-const APP_NAME = "HOOP HUB";
-const APP_TAGLINE = "Track your game. Own your grind.";
+const APP_NAME = "B-BALL TRACKER";
+const APP_TAGLINE = "Track your game. Own your progress.";
 const ADMIN_EMAILS = ["rowanck00@gmail.com", "kingof21kings@gmail.com"];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -298,13 +298,23 @@ async function enablePushNotifications(userId: string) {
   }
   const permission = await Notification.requestPermission();
   if (permission !== "granted") return { ok: false, error: "Notifications are blocked for this site." };
-  const keyRes = await apiFetch<{ publicKey?: string; hasPublicKey?: boolean; hasPrivateKey?: boolean; message?: string }>("/push/public-key", {});
+  let keyRes: { publicKey?: string; hasPublicKey?: boolean; hasPrivateKey?: boolean; message?: string; status?: number } = {};
+  try {
+    const response = await fetch(`${SERVER}/push/public-key`, { signal: AbortSignal.timeout(6000), headers: await authHeaders() });
+    keyRes.status = response.status;
+    keyRes = { ...keyRes, ...(await response.json()) };
+  } catch {
+    return { ok: false, error: "Could not reach the push setup endpoint. Redeploy the Supabase function, then refresh." };
+  }
+  if (keyRes.status && keyRes.status >= 400) {
+    return { ok: false, error: `Push setup endpoint returned ${keyRes.status}. Redeploy the Supabase function.` };
+  }
   if (!keyRes.publicKey) {
     const missing = [
       keyRes.hasPublicKey === false ? "public key" : "",
       keyRes.hasPrivateKey === false ? "private key" : "",
     ].filter(Boolean).join(" and ");
-    return { ok: false, error: missing ? `Missing ${missing} in Supabase secrets.` : "Push keys are not set up on the server yet." };
+    return { ok: false, error: missing ? `Missing ${missing} in Supabase secrets on project ${projectId}.` : `Push keys are not visible to the deployed function on project ${projectId}.` };
   }
   const registration = await navigator.serviceWorker.register("/sw.js");
   const existing = await registration.pushManager.getSubscription();

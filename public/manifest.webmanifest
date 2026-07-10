@@ -1,6 +1,6 @@
 {
-  "name": "Hoop Hub",
-  "short_name": "Hoop Hub",
+  "name": "B-Ball Tracker",
+  "short_name": "B-Ball",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
