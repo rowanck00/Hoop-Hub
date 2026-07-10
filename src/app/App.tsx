@@ -1555,6 +1555,15 @@ function WorkoutPlanner({ data, onUpdate }: { data: AppData; onUpdate: (d: AppDa
     onUpdate({ ...data, sessions, workoutPlan: plan, workoutHistory: [sum, ...(data.workoutHistory || [])].slice(0, 20) });
     setSummary(sum);
   }
+  function deleteWorkoutSummary(id: string) {
+    const item = (data.workoutHistory || []).find(w => w.id === id);
+    if (!item) return;
+    const sessions = data.sessions
+      .map(s => s.date === item.date ? { ...s, minutes: Math.max(0, s.minutes - item.completedMinutes) } : s)
+      .filter(s => s.minutes > 0);
+    onUpdate({ ...data, sessions, workoutHistory: (data.workoutHistory || []).filter(w => w.id !== id) });
+    if (summary?.id === id) setSummary(null);
+  }
   async function finishWorkout(early = false) {
     const finalSec = early ? completedSec : totalSec;
     const minutes = Math.max(1, Math.round(finalSec / 60));
@@ -1598,6 +1607,20 @@ function WorkoutPlanner({ data, onUpdate }: { data: AppData; onUpdate: (d: AppDa
         <div className="grid grid-cols-2 md:grid-cols-5 gap-2"><button onClick={togglePause} className="bg-secondary rounded-xl py-2 text-sm font-semibold">{paused ? "Resume" : "Pause"}</button><button onClick={skip} className="bg-secondary rounded-xl py-2 text-sm font-semibold">Skip Drill</button><button onClick={addTime} className="bg-secondary rounded-xl py-2 text-sm font-semibold">+5 Min</button><button onClick={()=>void finishWorkout(true)} className="bg-secondary rounded-xl py-2 text-sm font-semibold text-destructive">End Early</button></div>
       </div>}
       {summary && <div className="bg-background border border-border rounded-xl p-4"><p className="font-black text-primary mb-1">Workout Summary</p><p className="text-sm">Completed {summary.completedMinutes} of {summary.totalMinutes} planned minutes ({summary.completionPct}%). Basketball hours were added to training history.</p></div>}
+      {!!data.workoutHistory?.length && (
+        <div className="bg-background border border-border rounded-xl p-4 space-y-3">
+          <p className="text-xs uppercase tracking-wider text-muted-foreground">Completed Workouts</p>
+          {data.workoutHistory.slice(0, 5).map(w => (
+            <div key={w.id} className="flex items-center justify-between gap-3 border-b border-border last:border-0 pb-2 last:pb-0 text-sm">
+              <div>
+                <p className="font-medium">{shortDate(w.date)} - {w.completedMinutes} min</p>
+                <p className="text-xs text-muted-foreground">{w.completionPct}% complete</p>
+              </div>
+              <button onClick={() => deleteWorkoutSummary(w.id)} className="text-muted-foreground hover:text-destructive"><Trash2 size={14}/></button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1658,6 +1681,7 @@ function StrengthView({ data, onUpdate, userId }: { data: AppData; onUpdate: (d:
   const ex = data.strength[Math.min(sel, data.strength.length-1)];
   const saveEntry = async () => { const w=parseFloat(wt),r=parseInt(rp); if(!w||!r)return; const videoUrl = prVideo ? await uploadUserAsset("pr-videos", userId, prVideo, "mp4").catch(()=>"") : ""; onUpdate({...data,strength:data.strength.map((e,i)=>i===sel?{...e,history:[...e.history,{date:new Date().toISOString().slice(0,10),weight:w,reps:r,est1rm:est1rm(w,r),videoUrl}]}:e)}); setWt(""); setRp(""); setPrVideo(null); setAdding(false); };
   const saveEx = () => { if(!exName.trim())return; const nd={...data,strength:[...data.strength,{name:exName.trim(),unit:"lbs" as const,history:[]}]}; onUpdate(nd); setSel(nd.strength.length-1); setExName(""); setAddEx(false); };
+  const deleteEntry = (entryIndex: number) => onUpdate({ ...data, strength: data.strength.map((e,i)=>i===sel?{...e,history:e.history.filter((_,j)=>j!==entryIndex)}:e) });
   const graphData = ex.history.map(h=>({date:shortDate(h.date),weight:h.weight,est1rm:h.est1rm || est1rm(h.weight,h.reps)}));
   const best = ex.history.length?Math.max(...ex.history.map(h=>h.weight)):0;
   const bestEst = ex.history.length?Math.max(...ex.history.map(h=>h.est1rm || est1rm(h.weight,h.reps))):0;
@@ -1680,11 +1704,11 @@ function StrengthView({ data, onUpdate, userId }: { data: AppData; onUpdate: (d:
       <div className="bg-card border border-border rounded-2xl p-6">
         <div className="flex items-center justify-between mb-4"><span className="text-xs uppercase tracking-wider text-muted-foreground">History</span>{!adding&&<button onClick={()=>setAdding(true)} className="flex items-center gap-1.5 bg-primary text-primary-foreground text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-accent"><Plus size={12}/> Log today</button>}</div>
         {adding&&(<div className="grid md:grid-cols-[1fr_1fr_1.4fr_auto] gap-3 mb-4 p-3 bg-secondary rounded-xl"><div><label className="text-xs text-muted-foreground block mb-1">Weight ({ex.unit})</label><input autoFocus value={wt} onChange={e=>setWt(e.target.value)} type="number" placeholder="225" className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm outline-none"/></div><div><label className="text-xs text-muted-foreground block mb-1">Reps</label><input value={rp} onChange={e=>setRp(e.target.value)} type="number" placeholder="5" className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm outline-none"/></div><div><label className="text-xs text-muted-foreground block mb-1">PR video</label><label className="flex items-center justify-center gap-2 w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm cursor-pointer hover:border-primary"><Video size={14}/>{prVideo ? prVideo.name : "Choose video"}<input type="file" accept="video/*" onChange={e=>setPrVideo(e.target.files?.[0]||null)} className="hidden"/></label></div><div className="flex gap-2 items-end"><button onClick={saveEntry} className="bg-primary text-primary-foreground rounded-lg p-3 hover:bg-accent"><Check size={15}/></button><button onClick={()=>{setAdding(false);setPrVideo(null);}} className="bg-muted rounded-lg p-3"><X size={15}/></button></div></div>)}
-        {ex.history.length===0?<p className="text-muted-foreground text-sm text-center py-4">No entries yet.</p>:(<div>{[...ex.history].reverse().map((h,i)=>(<div key={i} className="flex justify-between items-center py-2 border-b border-border last:border-0"><span className="text-sm text-muted-foreground">{shortDate(h.date)}</span><div className="flex gap-4"><span className="text-sm">{h.reps} reps</span><span className="text-sm font-semibold text-primary">{h.weight} {ex.unit}</span></div></div>))}</div>)}
+        {ex.history.length===0?<p className="text-muted-foreground text-sm text-center py-4">No entries yet.</p>:(<div>{[...ex.history].map((h,entryIndex)=>({h,entryIndex})).reverse().map(({h,entryIndex})=>(<div key={`${h.date}-${entryIndex}`} className="flex justify-between items-center gap-3 py-2 border-b border-border last:border-0"><span className="text-sm text-muted-foreground">{shortDate(h.date)}</span><div className="flex gap-4 items-center"><span className="text-sm">{h.reps} reps</span><span className="text-sm font-semibold text-primary">{h.weight} {ex.unit}</span><button onClick={()=>deleteEntry(entryIndex)} className="text-muted-foreground hover:text-destructive"><Trash2 size={14}/></button></div></div>))}</div>)}
       </div>
       <div className="bg-card border border-border rounded-2xl p-6">
         <p className="text-xs uppercase tracking-wider text-muted-foreground mb-4">Estimated 1RM History</p>
-        {ex.history.length===0?<p className="text-muted-foreground text-sm">No PRs yet.</p>:<div className="space-y-3">{[...ex.history].reverse().map((h,i)=><div key={i} className="border-b border-border pb-3 last:border-0"><div className="flex flex-wrap justify-between gap-2 text-sm"><span>{shortDate(h.date)} - {h.weight} x {h.reps}</span><span className="text-primary font-semibold">Estimated 1RM {h.est1rm || est1rm(h.weight,h.reps)} {ex.unit}</span></div>{h.videoUrl&&<video src={h.videoUrl} controls className="mt-2 w-full max-h-56 rounded-xl bg-black object-contain"/>}</div>)}</div>}
+        {ex.history.length===0?<p className="text-muted-foreground text-sm">No PRs yet.</p>:<div className="space-y-3">{[...ex.history].map((h,entryIndex)=>({h,entryIndex})).reverse().map(({h,entryIndex})=><div key={`${h.date}-${entryIndex}`} className="border-b border-border pb-3 last:border-0"><div className="flex flex-wrap justify-between gap-2 text-sm"><span>{shortDate(h.date)} - {h.weight} x {h.reps}</span><div className="flex items-center gap-3"><span className="text-primary font-semibold">Estimated 1RM {h.est1rm || est1rm(h.weight,h.reps)} {ex.unit}</span><button onClick={()=>deleteEntry(entryIndex)} className="text-muted-foreground hover:text-destructive"><Trash2 size={14}/></button></div></div>{h.videoUrl&&<video src={h.videoUrl} controls className="mt-2 w-full max-h-56 rounded-xl bg-black object-contain"/>}</div>)}</div>}
       </div>
     </div>
   );
