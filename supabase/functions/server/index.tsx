@@ -62,14 +62,18 @@ function ytId(url: string): string | null {
 }
 
 function miniProfile(p: any) {
-  if (!p) return { userId: "", firstName: "Player", lastName: "", position: "", avatarUrl: "", role: "player", accountType: "player", teamName: "" };
-  return { userId: p.userId, firstName: p.firstName, lastName: p.lastName, position: p.position, avatarUrl: p.avatarUrl || "", role: isAdminEmail(p.email) ? "admin" : "player", accountType: p.accountType || "player", teamName: p.teamName || "" };
+  if (!p) return { userId: "", firstName: "Player", lastName: "", username: "", hideFullName: false, displayName: "Player", position: "", avatarUrl: "", role: "player", accountType: "player", teamName: "" };
+  const publicName = p.hideFullName && p.username ? `@${p.username}` : `${p.firstName || ""} ${p.lastName || ""}`.trim() || "Player";
+  return { userId: p.userId, firstName: p.firstName, lastName: p.lastName, username: p.username || "", hideFullName: !!p.hideFullName, displayName: publicName, position: p.position, avatarUrl: p.avatarUrl || "", role: isAdminEmail(p.email) ? "admin" : "player", accountType: p.accountType || "player", teamName: p.teamName || "" };
 }
 function safeProfile(p: any) {
   return p ? { ...p, role: isAdminEmail(p.email) ? "admin" : "player" } : null;
 }
 function cleanText(value: unknown, max = 80) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+function cleanUsername(value: unknown) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 24);
 }
 function cleanImageUrl(value: unknown) {
   const raw = String(value || "").trim();
@@ -142,6 +146,8 @@ app.post("/make-server-4cb0fb87/profile", async (c) => {
     ...profile,
     firstName: cleanText(profile.firstName),
     lastName: cleanText(profile.lastName),
+    username: cleanUsername(profile.username),
+    hideFullName: !!profile.hideFullName,
     avatarUrl: cleanImageUrl(profile.avatarUrl),
     role: isAdminEmail(auth.user.email) ? "admin" : "player",
   };
@@ -165,7 +171,7 @@ app.get("/make-server-4cb0fb87/users/search", async (c) => {
   const index: string[] = (await kv.get("user_index")) || [];
   const all = await Promise.all(index.map(id => kv.get(`profile_${id}`)));
   const matched = all.filter((p: any) =>
-    p && (`${p.firstName} ${p.lastName}`.toLowerCase().includes(q) || (p.teamName || "").toLowerCase().includes(q))
+    p && !p.removed && (`${p.firstName} ${p.lastName}`.toLowerCase().includes(q) || (p.username || "").toLowerCase().includes(q) || (p.teamName || "").toLowerCase().includes(q))
   ).slice(0, 10).map((p: any) => miniProfile(p));
   return c.json({ users: matched });
 });
@@ -192,7 +198,7 @@ app.get("/make-server-4cb0fb87/community", async (c) => {
   const players = await Promise.all(index.map(async (userId: string) => {
     const profile = await kv.get(`profile_${userId}`);
     const gamedata = await kv.get(`gamedata_${userId}`);
-    if (!profile) return null;
+    if (!profile || profile.removed) return null;
     const shots = gamedata?.shots || [];
     const sessions = gamedata?.sessions || [];
     const made = shots.reduce((a: number, b: any) => a + b.made, 0);
@@ -209,6 +215,21 @@ app.get("/make-server-4cb0fb87/community", async (c) => {
     };
   }));
   return c.json({ players: players.filter(Boolean) });
+});
+
+app.delete("/make-server-4cb0fb87/community/users/:userId", async (c) => {
+  const userId = c.req.param("userId");
+  const auth = await requireUser(c);
+  if (auth.error) return auth.error;
+  if (!isAdminEmail(auth.user.email)) return c.json({ error: "Admin required" }, 403);
+  const profile = await kv.get(`profile_${userId}`);
+  if (!profile) return c.json({ error: "Player not found" }, 404);
+  await kv.set(`profile_${userId}`, { ...profile, removed: true, isPublic: false, removedAt: new Date().toISOString(), removedBy: auth.user.id });
+  const index: string[] = (await kv.get("user_index")) || [];
+  await kv.set("user_index", index.filter((id: string) => id !== userId));
+  const posts = await kv.getByPrefix("post_");
+  await Promise.all(posts.filter((p: any) => p?.userId === userId).map((p: any) => kv.set(`post_${p.id}`, { ...p, removed: true, removedAt: new Date().toISOString(), removedBy: auth.user.id })));
+  return c.json({ ok: true });
 });
 
 // ── Follow system ─────────────────────────────────────────────────────────────
@@ -323,7 +344,7 @@ app.post("/make-server-4cb0fb87/posts", async (c) => {
   await kv.set(`post_${id}`, post);
 
   const profile = await kv.get(`profile_${userId}`);
-  const pName = profile ? `${profile.firstName} ${profile.lastName}`.trim() : "Someone";
+  const pName = profile ? miniProfile(profile).displayName : "Someone";
 
   if (replyTo) {
     const parent = await kv.get(`post_${replyTo}`);
@@ -494,7 +515,7 @@ app.get("/make-server-4cb0fb87/teams", async (c) => {
   const teams = await kv.getByPrefix("team_");
   const enriched = await Promise.all(teams.map(async (team: any) => {
     const profiles = await Promise.all((team.members || []).slice(0, 5).map((uid: string) => kv.get(`profile_${uid}`)));
-    return { ...team, memberProfiles: profiles.filter(Boolean).map((p: any) => ({ userId: p.userId, firstName: p.firstName, lastName: p.lastName, position: p.position })) };
+    return { ...team, memberProfiles: profiles.filter(Boolean).filter((p: any) => !p.removed).map((p: any) => miniProfile(p)) };
   }));
   return c.json({ teams: enriched.filter(Boolean) });
 });

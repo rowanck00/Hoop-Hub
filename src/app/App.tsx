@@ -23,6 +23,7 @@ type AuthState = "loading" | "unauthenticated" | "needs_profile" | "ready";
 
 interface UserProfile {
   userId: string; firstName: string; lastName: string; email: string;
+  username?: string; hideFullName?: boolean;
   role?: "admin" | "player"; avatarUrl?: string;
   position: string; gradYear: string; height: string; weight: string;
   wingspan: string; vertical: string; bio: string; isPublic: boolean;
@@ -31,10 +32,10 @@ interface UserProfile {
 interface Team {
   id: string; name: string; level: string; description: string; location: string;
   createdBy: string; creatorName: string; members: string[];
-  memberProfiles: { userId: string; firstName: string; lastName: string; position: string; }[];
+  memberProfiles: MiniProfile[];
   createdAt: string;
 }
-interface MiniProfile { firstName: string; lastName: string; position: string; avatarUrl?: string; role?: "admin" | "player"; }
+interface MiniProfile { userId?: string; firstName: string; lastName: string; username?: string; hideFullName?: boolean; displayName?: string; position: string; avatarUrl?: string; role?: "admin" | "player"; }
 interface PostData {
   id: string; userId: string; content: string;
   videoUrl?: string; videoId?: string;
@@ -74,7 +75,11 @@ interface AppData {
 // ─── Config ───────────────────────────────────────────────────────────────────
 const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
 const TEAM_LEVELS = ["Men's League", "High School", "College", "Pro / Overseas", "Club / Recreational"];
-const SERVER = `https://${projectId}.supabase.co/functions/v1/make-server-4cb0fb87`;
+const SERVER_URLS = [
+  `https://${projectId}.supabase.co/functions/v1/server/make-server-4cb0fb87`,
+  `https://${projectId}.supabase.co/functions/v1/make-server-4cb0fb87`,
+];
+const SERVER = SERVER_URLS[0];
 const APP_NAME = "B-BALL TRACKER";
 const APP_TAGLINE = "Track your game. Own your progress.";
 const ADMIN_EMAILS = ["rowanck00@gmail.com", "kingof21kings@gmail.com"];
@@ -85,6 +90,7 @@ function shortDate(iso: string) { return new Date(iso + "T12:00:00").toLocaleDat
 function formatTime(s: number) { return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); }
 function lastDays(n: number) { return Array.from({ length: n }, (_, i) => makeDate(n - 1 - i)); }
 function sanitizeText(s: string, max = 80) { return s.replace(/\s+/g, " ").trim().slice(0, max); }
+function sanitizeUsername(s: string) { return s.toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 24); }
 function sanitizeImageUrl(url: string) {
   const clean = url.trim();
   if (!clean) return "";
@@ -177,7 +183,17 @@ function emptyTrainingPlan(): TrainingPlanSettings {
   return { age: "15", experience: "Intermediate", inSeason: false, practicesPerWeek: "3", gamesPerWeek: "1", equipment: "Ball, hoop", goal: "Shooting", kneePain: false, notes: "" };
 }
 function emptyData(): AppData { return { streak: 0, lastPracticeDate: "", shots: [], sessions: [], strength: defaultStrength(), jumpTests: [], athleticLifts: { powerClean: "", deepBackSquat: "" }, trainingPlan: emptyTrainingPlan(), workoutPlan: defaultWorkoutPlan(), workoutHistory: [] }; }
-function initials(p?: MiniProfile | null) { return p ? `${p.firstName?.[0] ?? ""}${p.lastName?.[0] ?? ""}`.toUpperCase() : "?"; }
+function displayName(p?: Pick<UserProfile, "firstName" | "lastName" | "username" | "hideFullName"> | MiniProfile | null) {
+  if (!p) return "Player";
+  if (p.hideFullName && p.username) return `@${p.username}`;
+  if (p.hideFullName) return p.firstName || "Player";
+  return `${p.firstName || ""} ${p.lastName || ""}`.trim() || (p.username ? `@${p.username}` : "Player");
+}
+function initials(p?: MiniProfile | null) {
+  if (!p) return "?";
+  const name = displayName(p).replace("@", "");
+  return name.slice(0, 2).toUpperCase();
+}
 
 // ─── Rank system ──────────────────────────────────────────────────────────────
 const RANKS = [
@@ -245,12 +261,35 @@ async function flushPendingSync(userId: string) {
 }
 
 async function apiFetch<T>(path: string, fallback: T): Promise<T> {
-  try { const r = await fetch(`${SERVER}${path}`, { signal: AbortSignal.timeout(6000), headers: await authHeaders() }); return await r.json(); }
-  catch { return fallback as any; }
+  for (const base of SERVER_URLS) {
+    try {
+      const r = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(6000), headers: await authHeaders() });
+      if (r.ok) return await r.json();
+    } catch {}
+  }
+  return fallback as any;
 }
 async function apiPost(path: string, body: any) {
-  try { const r = await fetch(`${SERVER}${path}`, { method: "POST", headers: await authHeaders(), body: JSON.stringify(body), signal: AbortSignal.timeout(6000) }); return await r.json(); }
-  catch { return null; }
+  for (const base of SERVER_URLS) {
+    try {
+      const r = await fetch(`${base}${path}`, { method: "POST", headers: await authHeaders(), body: JSON.stringify(body), signal: AbortSignal.timeout(6000) });
+      if (r.ok) return await r.json();
+      const data = await r.json().catch(() => null);
+      if (data?.error) return data;
+    } catch {}
+  }
+  return null;
+}
+async function apiDelete(path: string) {
+  for (const base of SERVER_URLS) {
+    try {
+      const r = await fetch(`${base}${path}`, { method: "DELETE", headers: await authHeaders(), signal: AbortSignal.timeout(6000) });
+      if (r.ok) return await r.json();
+      const data = await r.json().catch(() => null);
+      if (data?.error) return data;
+    } catch {}
+  }
+  return null;
 }
 
 async function uploadCommunityVideo(userId: string, file: File) {
@@ -284,8 +323,8 @@ const unfollowUser  = (followerId: string, followeeId: string) => apiPost("/unfo
 const fetchSocial   = async (userId: string) => apiFetch<{following:string[];followers:string[];followingCount:number;followersCount:number}>(`/social/${userId}`, {following:[],followers:[],followingCount:0,followersCount:0});
 const fetchNotifs   = async (userId: string) => { const d = await apiFetch<{notifications: any[]}>(`/notifications/${userId}`, {notifications:[]}); return d.notifications ?? []; };
 const markNotifsRead = (userId: string) => apiPost(`/notifications/${userId}/read`, {});
-const clearNotifs = (userId: string) => bg(`${SERVER}/notifications/${userId}`, { method: "DELETE" });
-const deleteTeam = (id: string) => bg(`${SERVER}/teams/${id}`, { method: "DELETE" });
+const clearNotifs = (userId: string) => apiDelete(`/notifications/${userId}`);
+const deleteTeam = (id: string) => apiDelete(`/teams/${id}`);
 
 function urlBase64ToUint8Array(base64: string) {
   const padding = "=".repeat((4 - (base64.length % 4)) % 4);
@@ -298,14 +337,20 @@ async function enablePushNotifications(userId: string) {
   }
   const permission = await Notification.requestPermission();
   if (permission !== "granted") return { ok: false, error: "Notifications are blocked for this site." };
-  let keyRes: { publicKey?: string; hasPublicKey?: boolean; hasPrivateKey?: boolean; message?: string; status?: number } = {};
-  try {
-    const response = await fetch(`${SERVER}/push/public-key`, { signal: AbortSignal.timeout(6000), headers: await authHeaders() });
-    keyRes.status = response.status;
-    keyRes = { ...keyRes, ...(await response.json()) };
-  } catch {
-    return { ok: false, error: "Could not reach the push setup endpoint. Redeploy the Supabase function, then refresh." };
+  let keyRes: { publicKey?: string; hasPublicKey?: boolean; hasPrivateKey?: boolean; message?: string; status?: number; base?: string } = {};
+  for (const base of SERVER_URLS) {
+    try {
+      const response = await fetch(`${base}/push/public-key`, { signal: AbortSignal.timeout(6000), headers: await authHeaders() });
+      keyRes.status = response.status;
+      keyRes.base = base;
+      if (response.ok) {
+        const data = await response.json();
+        keyRes = { ...keyRes, ...data };
+        if (data.publicKey) break;
+      }
+    } catch {}
   }
+  if (!keyRes.status) return { ok: false, error: "Could not reach either Supabase function URL. Redeploy the Supabase function, then refresh." };
   if (keyRes.status && keyRes.status >= 400) {
     return { ok: false, error: `Push setup endpoint returned ${keyRes.status}. Redeploy the Supabase function.` };
   }
@@ -341,8 +386,8 @@ const ChartTip = ({ active, payload, label, unit = "" }: any) => {
 
 // ─── Avatar ───────────────────────────────────────────────────────────────────
 const Avatar = ({ p, size = 9 }: { p?: MiniProfile | null; size?: number }) => (
-  <div className={`w-${size} h-${size} rounded-xl bg-primary/20 flex items-center justify-center text-sm font-black text-primary flex-shrink-0`} style={{ fontFamily: "'Roboto Slab',serif" }}>
-    {p?.avatarUrl ? <img src={p.avatarUrl} alt="" className="w-full h-full object-cover rounded-xl" /> : initials(p)}
+  <div className="rounded-xl bg-primary/20 flex items-center justify-center text-sm font-black text-primary flex-shrink-0 overflow-hidden" style={{ width: `${size * 0.25}rem`, height: `${size * 0.25}rem`, fontFamily: "'Roboto Slab',serif" }}>
+    {p?.avatarUrl ? <img src={p.avatarUrl} alt="" className="block w-full h-full object-cover" /> : initials(p)}
   </div>
 );
 
@@ -351,7 +396,7 @@ const QuotedPost = ({ post }: { post: PostData }) => (
   <div className="border border-border rounded-xl p-3 mt-2 space-y-1.5">
     <div className="flex items-center gap-2">
       <div className="w-5 h-5 rounded-lg bg-primary/20 flex items-center justify-center text-xs font-black text-primary">{initials(post.profile)}</div>
-      <span className="text-sm font-semibold">{post.profile?.firstName} {post.profile?.lastName}</span>
+      <span className="text-sm font-semibold">{displayName(post.profile)}</span>
       {post.profile?.position && <span className="text-xs text-primary bg-primary/10 px-1.5 py-0.5 rounded-md">{post.profile.position}</span>}
     </div>
     {post.content && <p className="text-sm text-muted-foreground line-clamp-3">{post.content}</p>}
@@ -415,14 +460,14 @@ function PostCard({ post, currentUserId, currentUserName, canModerate = false, o
           <Avatar p={post.profile} size={9} />
           <div className="min-w-0">
             <div className="flex items-center gap-2 min-w-0 flex-wrap">
-              <span className="font-semibold text-sm truncate max-w-[12rem]">{post.profile?.firstName} {post.profile?.lastName}</span>
+              <span className="font-semibold text-sm truncate max-w-[12rem]">{displayName(post.profile)}</span>
               {post.profile?.position && <span className="text-xs text-primary bg-primary/10 px-1.5 py-0.5 rounded-md">{post.profile.position}</span>}
             </div>
             <span className="text-xs text-muted-foreground">{timeAgo(post.createdAt)}</span>
           </div>
         </div>
         {(currentUserId === post.userId || canModerate) && (
-          <button onClick={async () => { await bg(`${SERVER}/posts/${post.id}`, { method: "DELETE" }); onDelete(post.id); }} className="text-muted-foreground hover:text-destructive p-1"><Trash2 size={13} /></button>
+          <button onClick={async () => { const res = await apiDelete(`/posts/${post.id}`); if (res?.ok) onDelete(post.id); }} className="text-muted-foreground hover:text-destructive p-1"><Trash2 size={13} /></button>
         )}
       </div>
       {post.content && <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{post.content}</p>}
@@ -490,7 +535,7 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, on
       const uploadedVideoUrl = videoFile ? await uploadCommunityVideo(profile.userId, videoFile) : null;
       const res = await apiPost("/posts", { userId: profile.userId, content: content.trim(), videoUrl: uploadedVideoUrl, replyTo: replyTo?.id ?? null });
       if (res?.post) {
-        res.post.profile = { firstName: profile.firstName, lastName: profile.lastName, position: profile.position, avatarUrl: profile.avatarUrl, role: profile.role };
+        res.post.profile = { userId: profile.userId, firstName: profile.firstName, lastName: profile.lastName, username: profile.username, hideFullName: profile.hideFullName, position: profile.position, avatarUrl: profile.avatarUrl, role: profile.role };
         onPost(res.post);
       }
       setContent("");
@@ -507,7 +552,7 @@ function ComposeBox({ profile, placeholder = "What's on your mind?", replyTo, on
     <div className="bg-card border border-border rounded-2xl p-3 sm:p-4 space-y-3 max-w-full overflow-hidden">
       {replyTo && (
         <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-          <MessageCircle size={11} /> Replying to <strong className="text-foreground">{replyTo.profile?.firstName}</strong>
+          <MessageCircle size={11} /> Replying to <strong className="text-foreground">{displayName(replyTo.profile)}</strong>
         </p>
       )}
       <div className="flex gap-3 min-w-0">
@@ -543,7 +588,7 @@ function FeedTab({ currentUserId, currentProfile }: { currentUserId?: string; cu
   const [posts, setPosts] = useState<PostData[]>([]);
   const [loading, setLoading] = useState(true);
   const [replyTarget, setReplyTarget] = useState<PostData | null>(null);
-  const currentUserName = currentProfile ? `${currentProfile.firstName} ${currentProfile.lastName}`.trim() : undefined;
+  const currentUserName = currentProfile ? displayName(currentProfile) : undefined;
   const canModerate = isAdmin(currentProfile);
 
   useEffect(() => {
@@ -570,7 +615,7 @@ function FeedTab({ currentUserId, currentProfile }: { currentUserId?: string; cu
 }
 
 // ─── Players Tab ──────────────────────────────────────────────────────────────
-function PlayersTab({ onSelect }: { onSelect: (p: CommunityPlayer) => void }) {
+function PlayersTab({ onSelect, currentProfile }: { onSelect: (p: CommunityPlayer) => void; currentProfile?: UserProfile | null }) {
   const [players, setPlayers] = useState<CommunityPlayer[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState(""), [pos, setPos] = useState("All");
@@ -578,9 +623,14 @@ function PlayersTab({ onSelect }: { onSelect: (p: CommunityPlayer) => void }) {
   useEffect(() => { apiFetch<{ players: CommunityPlayer[] }>("/community", { players: [] }).then(d => { setPlayers(d.players ?? []); setLoading(false); }); }, []);
 
   const filtered = players.filter(p => p.profile?.isPublic !== false)
-    .filter(p => `${p.profile?.firstName} ${p.profile?.lastName}`.toLowerCase().includes(search.toLowerCase()))
+    .filter(p => `${displayName(p.profile)} ${p.profile?.username || ""}`.toLowerCase().includes(search.toLowerCase()))
     .filter(p => pos === "All" || p.profile?.position === pos)
     .sort((a, b) => b.summary.totalMinutes - a.summary.totalMinutes);
+  const canModerate = isAdmin(currentProfile);
+  async function removePlayer(userId: string) {
+    const res = await apiDelete(`/community/users/${userId}`);
+    if (res?.ok) setPlayers(prev => prev.filter(p => p.userId !== userId));
+  }
 
   return (
     <div className="space-y-4">
@@ -597,7 +647,7 @@ function PlayersTab({ onSelect }: { onSelect: (p: CommunityPlayer) => void }) {
                 <Avatar p={player.profile} size={12} />
                 <div className="flex gap-1.5"><span className="bg-primary/20 text-primary text-xs font-semibold px-2 py-1 rounded-lg">{player.profile.position}</span><span className="bg-card text-muted-foreground text-xs px-2 py-1 rounded-lg">{player.profile.gradYear}</span></div>
               </div>
-              <div className="mt-3"><h3 className="font-black text-base" style={{ fontFamily: "'Roboto Slab',serif" }}>{player.profile.firstName} {player.profile.lastName}</h3>{player.profile.height && <p className="text-xs text-muted-foreground mt-0.5">{player.profile.height}{player.profile.weight ? ` · ${player.profile.weight} lbs` : ""}</p>}</div>
+              <div className="mt-3"><h3 className="font-black text-base" style={{ fontFamily: "'Roboto Slab',serif" }}>{displayName(player.profile)}</h3>{player.profile.username && !player.profile.hideFullName && <p className="text-xs text-muted-foreground mt-0.5">@{player.profile.username}</p>}{player.profile.height && <p className="text-xs text-muted-foreground mt-0.5">{player.profile.height}{player.profile.weight ? ` · ${player.profile.weight} lbs` : ""}</p>}</div>
             </div>
             <div className="px-5 py-4 grid grid-cols-3 gap-2 text-center">
               {[{ l: "Streak", v: `${player.summary.streak}d` }, { l: "Shooting", v: `${player.summary.shootingPct}%` }, { l: "Hours", v: `${Math.round(player.summary.totalMinutes / 60)}h` }].map(s => (
@@ -606,7 +656,10 @@ function PlayersTab({ onSelect }: { onSelect: (p: CommunityPlayer) => void }) {
             </div>
             <div className="px-5 pb-4 flex items-center justify-between">
               <span className="text-xs font-medium" style={{ color: getRank(player.summary.totalMinutes).color }}>{getRank(player.summary.totalMinutes).label}</span>
-              <ArrowRight size={14} className="text-muted-foreground group-hover:text-primary" />
+              <div className="flex items-center gap-2">
+                {canModerate && <button onClick={(e)=>{ e.stopPropagation(); void removePlayer(player.userId); }} className="text-xs text-muted-foreground hover:text-destructive">Remove</button>}
+                <ArrowRight size={14} className="text-muted-foreground group-hover:text-primary" />
+              </div>
             </div>
           </div>
         ))}</div>}
@@ -741,8 +794,8 @@ function TeamsTab({ currentUserId, currentProfile }: { currentUserId?: string; c
                         <div className="flex flex-wrap gap-2">
                           {team.memberProfiles.map(m => (
                             <div key={m.userId} className="flex items-center gap-2 bg-secondary rounded-xl px-3 py-1.5">
-                              <div className="w-6 h-6 rounded-lg bg-primary/20 flex items-center justify-center text-xs font-black text-primary">{m.firstName[0]}{m.lastName[0]}</div>
-                              <span className="text-sm">{m.firstName} {m.lastName}</span>
+                              <div className="w-6 h-6 rounded-lg bg-primary/20 flex items-center justify-center text-xs font-black text-primary">{initials(m)}</div>
+                              <span className="text-sm">{displayName(m)}</span>
                               <span className="text-xs text-muted-foreground">{m.position}</span>
                             </div>
                           ))}
@@ -853,7 +906,7 @@ function CommunityPage({ currentUserId, currentProfile, onBack }: { currentUserI
   const [tab, setTab] = useState<"feed" | "players" | "teams">("feed");
   const [selected, setSelected] = useState<CommunityPlayer | null>(null);
 
-  const currentUserName = currentProfile ? `${currentProfile.firstName} ${currentProfile.lastName}`.trim() : undefined;
+  const currentUserName = currentProfile ? displayName(currentProfile) : undefined;
   if (selected) return <PlayerProfileView player={selected} onBack={() => setSelected(null)} currentUserId={currentUserId} currentUserName={currentUserName} />;
 
   return (
@@ -868,7 +921,7 @@ function CommunityPage({ currentUserId, currentProfile, onBack }: { currentUserI
           {(["feed", "players", "teams"] as const).map(t => <button key={t} onClick={() => setTab(t)} className={`flex-1 sm:flex-none px-3 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-colors capitalize ${tab === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>{t}</button>)}
         </div>
         {tab === "feed"    && <FeedTab currentUserId={currentUserId} currentProfile={currentProfile} />}
-        {tab === "players" && <PlayersTab onSelect={setSelected} />}
+        {tab === "players" && <PlayersTab onSelect={setSelected} currentProfile={currentProfile} />}
         {tab === "teams"   && <TeamsTab currentUserId={currentUserId} currentProfile={currentProfile} />}
       </main>
     </div>
@@ -898,25 +951,26 @@ function PlayerProfileView({ player, onBack, currentUserId, currentUserName }: {
 
   return (
     <div className="min-h-screen bg-background" style={{ fontFamily: "'DM Sans',sans-serif" }}>
-      <header className="border-b border-border px-6 py-5 max-w-5xl mx-auto flex items-center justify-between">
-        <div className="flex items-center gap-3">
+      <header className="border-b border-border px-4 sm:px-6 py-5 max-w-5xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
           {onBack && <button onClick={onBack} className="text-muted-foreground hover:text-foreground"><ChevronLeft size={20} /></button>}
           <Target size={24} className="text-primary flex-shrink-0" />
-          <div><h1 className="text-xl font-black leading-none" style={{ fontFamily: "'Roboto Slab',serif" }}>{p.firstName.toUpperCase()} {p.lastName.toUpperCase()}</h1><p className="text-xs text-muted-foreground uppercase tracking-widest">Player Profile</p></div>
+          <div className="min-w-0"><h1 className="text-xl font-black leading-none truncate" style={{ fontFamily: "'Roboto Slab',serif" }}>{displayName(p).toUpperCase()}</h1><p className="text-xs text-muted-foreground uppercase tracking-widest">Player Profile</p></div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <FollowButton currentUserId={currentUserId} currentUserName={currentUserName} targetUserId={player.userId} />
           <button onClick={copyLink} className="flex items-center gap-2 text-xs bg-card border border-border rounded-xl px-3 py-2 hover:border-primary hover:text-primary transition-all">
             {copied ? <Check size={13} /> : <Copy size={13} />}{copied ? "Copied!" : "Share"}
           </button>
         </div>
       </header>
-      <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-8 space-y-6 overflow-x-hidden">
         <div className="bg-card border border-border rounded-2xl overflow-hidden">
-          <div className="bg-gradient-to-r from-primary/20 via-primary/10 to-transparent px-6 py-6 flex items-center gap-5">
+          <div className="bg-gradient-to-r from-primary/20 via-primary/10 to-transparent px-4 sm:px-6 py-6 flex flex-col sm:flex-row sm:items-center gap-5">
             <Avatar p={p} size={16} />
-            <div className="flex-1">
-              <h2 className="text-2xl font-black leading-none" style={{ fontFamily: "'Roboto Slab',serif" }}>{p.firstName} {p.lastName}</h2>
+            <div className="flex-1 min-w-0 text-center sm:text-left">
+              <h2 className="text-2xl font-black leading-none break-words" style={{ fontFamily: "'Roboto Slab',serif" }}>{displayName(p)}</h2>
+              {p.username && !p.hideFullName && <p className="text-xs text-muted-foreground mt-1">@{p.username}</p>}
               <div className="flex flex-wrap gap-2 mt-2">
                 {p.position && <span className="bg-primary/20 text-primary text-xs font-semibold px-2.5 py-1 rounded-lg">{p.position}</span>}
                 {p.gradYear && <span className="bg-secondary text-muted-foreground text-xs px-2.5 py-1 rounded-lg">Class of {p.gradYear}</span>}
@@ -1088,7 +1142,7 @@ function LoginScreen() {
 
 // ─── Profile Setup ────────────────────────────────────────────────────────────
 function ProfileSetup({ userId, email, onComplete }: { userId: string; email: string; onComplete: (p: UserProfile) => void }) {
-  const [form, setForm] = useState({ firstName: "", lastName: "", avatarUrl: "", position: "PG", gradYear: String(new Date().getFullYear() + 1), height: "", weight: "", wingspan: "", vertical: "", bio: "", strengths: "", weaknesses: "", isPublic: true });
+  const [form, setForm] = useState({ firstName: "", lastName: "", username: "", hideFullName: false, avatarUrl: "", position: "PG", gradYear: String(new Date().getFullYear() + 1), height: "", weight: "", wingspan: "", vertical: "", bio: "", strengths: "", weaknesses: "", isPublic: true });
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
   const cls = "bg-secondary border border-border rounded-xl px-4 py-2.5 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary w-full";
   const lbl = "text-xs text-muted-foreground uppercase tracking-wider mb-1 block";
@@ -1096,7 +1150,7 @@ function ProfileSetup({ userId, email, onComplete }: { userId: string; email: st
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.firstName.trim() || !form.lastName.trim()) return;
-    const profile: UserProfile = withRole({ userId, email, ...form, firstName: sanitizeText(form.firstName), lastName: sanitizeText(form.lastName), avatarUrl: sanitizeImageUrl(form.avatarUrl) });
+    const profile: UserProfile = withRole({ userId, email, ...form, firstName: sanitizeText(form.firstName), lastName: sanitizeText(form.lastName), username: sanitizeUsername(form.username), avatarUrl: sanitizeImageUrl(form.avatarUrl) });
     void saveProfileCloud(userId, profile);
     onComplete(profile);
   }
@@ -1109,6 +1163,15 @@ function ProfileSetup({ userId, email, onComplete }: { userId: string; email: st
           <div className="grid grid-cols-2 gap-3">
             <div><label className={lbl}>First Name *</label><input autoFocus value={form.firstName} onChange={e => set("firstName", e.target.value)} placeholder="First name" className={cls} required /></div>
             <div><label className={lbl}>Last Name *</label><input value={form.lastName} onChange={e => set("lastName", e.target.value)} placeholder="Last name" className={cls} required /></div>
+          </div>
+          <div className="grid grid-cols-1 gap-3">
+            <div><label className={lbl}>Username</label><input value={form.username} onChange={e => set("username", sanitizeUsername(e.target.value))} placeholder="rowanck" className={cls} /></div>
+            <label className="flex items-center gap-3 cursor-pointer bg-secondary rounded-xl px-4 py-3">
+              <div onClick={() => set("hideFullName", !form.hideFullName)} className={`w-10 h-6 rounded-full transition-colors relative ${form.hideFullName ? "bg-primary" : "bg-muted"}`}>
+                <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${form.hideFullName ? "left-5" : "left-1"}`} />
+              </div>
+              <div><p className="text-sm font-medium">Show username instead of full name</p><p className="text-xs text-muted-foreground">Public pages will use your username when possible.</p></div>
+            </label>
           </div>
           <div><label className={lbl}>Profile Image</label><input type="file" accept="image/*" onChange={async e => { const f=e.target.files?.[0]; if(f) set("avatarUrl", await uploadUserAsset("profile-images", userId, f, "jpg").catch(()=>"")); }} className={cls} />{form.avatarUrl && <p className="text-xs text-primary mt-1">Image selected</p>}</div>
           <div className="grid grid-cols-2 gap-3">
@@ -1733,7 +1796,7 @@ function StrengthView({ data, onUpdate, userId }: { data: AppData; onUpdate: (d:
 // ─── Editable Measurables ────────────────────────────────────────────────────
 function EditableMeasurables({ profile, userId, onSave }: { profile: UserProfile; userId: string; onSave: (u: Partial<UserProfile>) => void }) {
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ firstName: profile.firstName, lastName: profile.lastName, avatarUrl: profile.avatarUrl || "", height: profile.height, weight: profile.weight, wingspan: profile.wingspan, vertical: profile.vertical, position: profile.position, gradYear: profile.gradYear });
+  const [form, setForm] = useState({ firstName: profile.firstName, lastName: profile.lastName, username: profile.username || "", hideFullName: !!profile.hideFullName, avatarUrl: profile.avatarUrl || "", height: profile.height, weight: profile.weight, wingspan: profile.wingspan, vertical: profile.vertical, position: profile.position, gradYear: profile.gradYear });
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
   const cls = "bg-muted border border-border rounded-xl px-3 py-2 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary w-full";
 
@@ -1741,7 +1804,7 @@ function EditableMeasurables({ profile, userId, onSave }: { profile: UserProfile
     const firstName = sanitizeText(form.firstName);
     const lastName = sanitizeText(form.lastName);
     if (!firstName || !lastName) return;
-    onSave({ ...form, firstName, lastName, avatarUrl: sanitizeImageUrl(form.avatarUrl) });
+    onSave({ ...form, firstName, lastName, username: sanitizeUsername(form.username), avatarUrl: sanitizeImageUrl(form.avatarUrl) });
     setEditing(false);
   }
 
@@ -1771,6 +1834,7 @@ function EditableMeasurables({ profile, userId, onSave }: { profile: UserProfile
         ) : (
           <p className="text-sm text-muted-foreground text-center py-1">Tap Edit to add your measurables</p>
         )}
+        {profile.hideFullName && profile.username && <p className="text-xs text-muted-foreground text-center mt-3">Public name: @{profile.username}</p>}
       </div>
     );
   }
@@ -1793,6 +1857,16 @@ function EditableMeasurables({ profile, userId, onSave }: { profile: UserProfile
           <label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">Last Name</label>
           <input value={form.lastName} onChange={e => set("lastName", e.target.value)} placeholder="Last name" className={cls} />
         </div>
+        <div className="col-span-2">
+          <label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">Username</label>
+          <input value={form.username} onChange={e => set("username", sanitizeUsername(e.target.value))} placeholder="username" className={cls} />
+        </div>
+        <label className="col-span-2 flex items-center gap-3 cursor-pointer bg-muted rounded-xl px-3 py-2">
+          <div onClick={() => setForm(f => ({ ...f, hideFullName: !f.hideFullName }))} className={`w-10 h-6 rounded-full transition-colors relative ${form.hideFullName ? "bg-primary" : "bg-secondary"}`}>
+            <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${form.hideFullName ? "left-5" : "left-1"}`} />
+          </div>
+          <div><p className="text-sm font-medium">Show username publicly</p><p className="text-xs text-muted-foreground">Hide full name on community pages and posts.</p></div>
+        </label>
         <div className="col-span-2">
           <label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">Profile Image</label>
           <input type="file" accept="image/*" onChange={async e => { const f=e.target.files?.[0]; if(f) set("avatarUrl", await uploadUserAsset("profile-images", userId, f, "jpg").catch(() => form.avatarUrl)); }} className={cls} />
@@ -2021,7 +2095,7 @@ export default function App() {
     url.searchParams.set("player", userId); url.searchParams.delete("view");
     const shareUrl = url.toString();
     try {
-      if (navigator.share) await navigator.share({ title: `${profile?.firstName || "Player"} on ${APP_NAME}`, url: shareUrl });
+      if (navigator.share) await navigator.share({ title: `${profile ? displayName(profile) : "Player"} on ${APP_NAME}`, url: shareUrl });
       else await navigator.clipboard.writeText(shareUrl);
       setShareCopied(true); setTimeout(() => setShareCopied(false), 1800);
     } catch {
@@ -2089,7 +2163,7 @@ export default function App() {
         <div className="flex items-center gap-3">
           {view!=="home"&&<button onClick={()=>setView("home")} className="mr-1 text-muted-foreground hover:text-foreground"><ChevronLeft size={20}/></button>}
           <Target size={24} className="text-primary flex-shrink-0" />
-          <div><h1 className="text-xl font-black tracking-tight leading-none" style={{fontFamily:"'Roboto Slab',serif"}}>{profile.firstName.toUpperCase()} {profile.lastName.toUpperCase()}</h1><p className="text-xs text-muted-foreground uppercase tracking-widest">{viewLabels[view]}</p></div>
+          <div><h1 className="text-xl font-black tracking-tight leading-none" style={{fontFamily:"'Roboto Slab',serif"}}>{displayName(profile).toUpperCase()}</h1><p className="text-xs text-muted-foreground uppercase tracking-widest">{viewLabels[view]}</p></div>
         </div>
         <div className="flex items-center gap-3">
           <button onClick={copyShareLink} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary">{shareCopied ? <Check size={13}/> : <ExternalLink size={13}/>} {shareCopied ? "Copied" : "Share"}</button>
@@ -2113,7 +2187,7 @@ export default function App() {
           <div className="relative rounded-2xl overflow-hidden h-48 bg-zinc-900">
             <img src="https://images.unsplash.com/photo-1546519638-68e109498ffc?w=1200&h=400&fit=crop&auto=format" alt="Court" className="w-full h-full object-cover opacity-60"/>
             <div className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/30 to-transparent flex items-end p-6">
-              <div><p className="text-xs uppercase tracking-widest text-primary font-medium mb-1">{APP_NAME}</p><h2 className="text-3xl font-black text-white leading-none" style={{fontFamily:"'Roboto Slab',serif"}}>Keep going, {profile.firstName}.</h2></div>
+              <div><p className="text-xs uppercase tracking-widest text-primary font-medium mb-1">{APP_NAME}</p><h2 className="text-3xl font-black text-white leading-none" style={{fontFamily:"'Roboto Slab',serif"}}>Keep going, {displayName(profile)}.</h2></div>
             </div>
             <div className="absolute top-3 right-3 flex items-center gap-2">
               <span className="bg-black/50 rounded-lg px-2 py-1 text-xs text-primary font-medium">{profile.position}</span>
@@ -2235,7 +2309,7 @@ export default function App() {
               </button>
             ))}
           </div>
-          <p className="text-center text-xs text-muted-foreground pb-4">Keep going, {profile.firstName}.</p>
+          <p className="text-center text-xs text-muted-foreground pb-4">Keep going, {displayName(profile)}.</p>
         </>}
       </main>
     </div>
